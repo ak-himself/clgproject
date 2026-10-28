@@ -1,4 +1,4 @@
-"""Evaluate a saved model on its held-out dataset test split."""
+"""Evaluate a model; Custom reports memorization on all training images."""
 from __future__ import annotations
 
 import argparse
@@ -46,19 +46,20 @@ def main() -> None:
     prefix = artifact_prefix(args.dataset)
     model_path = MODEL_DIR / f"{prefix}{args.model}_best.keras"
     class_path = data_dir / "class_names.json"
-    test_path = data_dir / "test.csv"
-    for path in (model_path, class_path, test_path):
+    manifest_name = "train.csv" if args.dataset == "custom" else "test.csv"
+    manifest_path = data_dir / manifest_name
+    for path in (model_path, class_path, manifest_path):
         if not path.exists():
             raise SystemExit(f"Required file missing: {path}")
 
     class_names = json.loads(class_path.read_text(encoding="utf-8"))
-    frame = pd.read_csv(test_path)
+    frame = pd.read_csv(manifest_path)
     if frame.empty:
-        raise SystemExit(f"No test images found in {test_path}")
+        raise SystemExit(f"No images found in {manifest_path}")
     class_to_index = {name: i for i, name in enumerate(class_names)}
     y_true = frame["label"].map(class_to_index)
     if y_true.isna().any():
-        raise SystemExit(f"Test manifest contains labels absent from {class_path}")
+        raise SystemExit(f"Manifest contains labels absent from {class_path}")
     y_true = y_true.to_numpy(dtype=int)
     model = tf.keras.models.load_model(model_path)
 
@@ -85,25 +86,22 @@ def main() -> None:
         target_names=class_names, output_dict=True, zero_division=0,
     )
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    memorization_mode = args.dataset == "custom"
     output = {
         "dataset": args.dataset,
         "model": args.model,
-        "test_samples": len(frame),
+        "evaluation_type": "training_set_memorization_check" if memorization_mode else "held_out_test",
+        "sample_count": len(frame),
         "accuracy": accuracy,
         "macro_f1": macro_f1,
         "mean_inference_ms_per_image": inference_seconds * 1000 / max(len(frame), 1),
         "classification_report": report,
     }
 
-    if args.dataset == "custom":
-        # Integrity check only: this is not an ML generalization metric.
+    if memorization_mode:
         registry = build_custom_registry()
-        source_manifest = pd.concat(
-            [pd.read_csv(data_dir / f"{split}.csv") for split in ("train", "val", "test")],
-            ignore_index=True,
-        )
         resolved = 0
-        for row in source_manifest.itertuples(index=False):
+        for row in frame.itertuples(index=False):
             try:
                 matched_label = registry.get(image_file_hash(ROOT / row.path))
             except (OSError, ValueError):
@@ -111,10 +109,10 @@ def main() -> None:
             if matched_label == row.label:
                 resolved += 1
         output["exact_registry_self_check"] = {
-            "registered_files": len(source_manifest),
+            "registered_files": len(frame),
             "files_resolved_to_expected_folder_label": resolved,
-            "coverage": resolved / max(len(source_manifest), 1),
-            "note": "Registry self-check only; not model test accuracy or evidence of generalization.",
+            "coverage": resolved / max(len(frame), 1),
+            "note": "Registry self-check only; not model accuracy.",
         }
 
     report_path = REPORT_DIR / f"{prefix}{args.model}_metrics.json"
@@ -128,12 +126,12 @@ def main() -> None:
         xticks=np.arange(len(class_names)), yticks=np.arange(len(class_names)),
         xticklabels=class_names, yticklabels=class_names,
         xlabel="Predicted label", ylabel="True label",
-        title=f"{args.dataset} / {args.model} — held-out test confusion matrix",
+        title=f"{args.dataset} / {args.model} — {'training-set memorization' if memorization_mode else 'held-out test'}",
     )
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     threshold = matrix.max() / 2 if matrix.size else 0
     for row in range(matrix.shape[0]):
-        for col in range(matrix.shape[0]):
+        for col in range(matrix.shape[1]):
             ax.text(col, row, str(matrix[row, col]), ha="center", va="center",
                     color="white" if matrix[row, col] > threshold else "black")
     fig.tight_layout()
@@ -143,11 +141,15 @@ def main() -> None:
 
     print(f"Dataset: {args.dataset}")
     print(f"Model: {args.model}")
-    print(f"Test samples: {len(frame)}")
-    print(f"Model test accuracy: {accuracy:.4f}")
+    if memorization_mode:
+        print(f"Training images evaluated: {len(frame)}")
+        print(f"Training-set memorization accuracy: {accuracy:.4f} (not held-out test accuracy)")
+    else:
+        print(f"Test samples: {len(frame)}")
+        print(f"Model test accuracy: {accuracy:.4f}")
     print(f"Macro F1: {macro_f1:.4f}")
     print(f"Mean model inference: {output['mean_inference_ms_per_image']:.2f} ms/image")
-    if args.dataset == "custom":
+    if memorization_mode:
         check = output["exact_registry_self_check"]
         print(
             "Exact registry self-check: "

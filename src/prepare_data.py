@@ -1,4 +1,9 @@
-"""Create reproducible train/validation/test manifests for TrashNet or Custom."""
+"""Prepare data manifests for TrashNet or Custom.
+
+TrashNet uses a stratified train/validation/test split.
+Custom deliberately uses every labelled image for training and for a
+training-set memorization check; it does not claim generalization.
+"""
 from __future__ import annotations
 
 import argparse
@@ -83,25 +88,52 @@ def main() -> None:
     if frame.empty:
         raise SystemExit(f"No images found under {source}")
     counts = frame["label"].value_counts()
-    if len(counts) < 2 or counts.min() < 3:
-        raise SystemExit("Each populated class must contain at least 3 images for stratified splitting.")
-
-    train_val, test = train_test_split(
-        frame, test_size=TEST_SIZE, random_state=SEED, stratify=frame["label"]
-    )
-    train, val = train_test_split(
-        train_val,
-        test_size=VAL_SIZE / (1.0 - TEST_SIZE),
-        random_state=SEED,
-        stratify=train_val["label"],
-    )
+    if len(counts) < 2:
+        raise SystemExit("At least two populated classes are required.")
 
     output.mkdir(parents=True, exist_ok=True)
-    for name, split in (("train", train), ("val", val), ("test", test)):
-        split.sort_values(["label", "path"]).to_csv(output / f"{name}.csv", index=False)
-        print(f"{name:5s}: {len(split):4d} images | {split['label'].nunique()} classes")
-
     class_names = sorted(frame["label"].unique().tolist())
+
+    if args.dataset == "custom":
+        # User explicitly wants all labelled custom images used for training.
+        full_data = frame.sort_values(["label", "path"]).reset_index(drop=True)
+        full_data.to_csv(output / "train.csv", index=False)
+        # Remove stale split files from the old custom workflow so they cannot
+        # be mistaken for valid held-out data.
+        for stale_name in ("val.csv", "test.csv"):
+            stale_path = output / stale_name
+            if stale_path.exists():
+                stale_path.unlink()
+        split_description = {
+            "train": 1.0,
+            "validation": 0.0,
+            "test": 0.0,
+            "method": "all_images_for_training_no_holdout",
+        }
+        print(f"train: {len(full_data):4d} images | {full_data['label'].nunique()} classes")
+        print("Custom mode: using 100% of the labelled images for training; no holdout split.")
+    else:
+        if counts.min() < 3:
+            raise SystemExit("Each TrashNet class must contain at least 3 images for stratified splitting.")
+        train_val, test = train_test_split(
+            frame, test_size=TEST_SIZE, random_state=SEED, stratify=frame["label"]
+        )
+        train, val = train_test_split(
+            train_val,
+            test_size=VAL_SIZE / (1.0 - TEST_SIZE),
+            random_state=SEED,
+            stratify=train_val["label"],
+        )
+        for name, split in (("train", train), ("val", val), ("test", test)):
+            split.sort_values(["label", "path"]).to_csv(output / f"{name}.csv", index=False)
+            print(f"{name:5s}: {len(split):4d} images | {split['label'].nunique()} classes")
+        split_description = {
+            "train": 0.70,
+            "validation": 0.15,
+            "test": 0.15,
+            "method": "stratified_train_validation_test",
+        }
+
     (output / "class_names.json").write_text(
         json.dumps(class_names, indent=2) + "\n", encoding="utf-8"
     )
@@ -109,7 +141,7 @@ def main() -> None:
         "dataset": args.dataset,
         "source_directory": source.relative_to(ROOT).as_posix(),
         "seed": SEED,
-        "split": {"train": 0.70, "validation": 0.15, "test": 0.15},
+        "split": split_description,
         "total_images": len(frame),
         "class_counts": {k: int(v) for k, v in counts.sort_index().items()},
         "classes": class_names,
@@ -122,8 +154,9 @@ def main() -> None:
     print(counts.sort_index().to_string())
     print(f"\nDataset: {args.dataset}")
     print(f"Source:  {source}")
-    print(f"Splits:  {output}")
-    print("Split proportions are approximately 70% train / 15% validation / 15% test.")
+    print(f"Manifests: {output}")
+    if args.dataset == "trashnet":
+        print("TrashNet split proportions are approximately 70% train / 15% validation / 15% test.")
 
 
 if __name__ == "__main__":

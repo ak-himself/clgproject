@@ -77,18 +77,28 @@ def make_dataset(frame: pd.DataFrame, training: bool, batch_size: int) -> tf.dat
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 
-def build_model(model_name: str, num_classes: int) -> tuple[keras.Model, keras.Model]:
+def build_model(
+    model_name: str, num_classes: int, *, memorization_mode: bool = False
+) -> tuple[keras.Model, keras.Model]:
     inputs = keras.Input(shape=(*IMAGE_SIZE, 3), name="image")
-    augmenter = keras.Sequential(
-        [
-            layers.RandomFlip("horizontal"),
-            layers.RandomRotation(0.06),
-            layers.RandomZoom(0.10),
-            layers.RandomContrast(0.10),
-        ],
-        name="training_augmentation",
-    )
-    x = augmenter(inputs)
+
+    # Custom mode deliberately disables augmentation and dropout to let the
+    # network fit the supplied images. TrashNet retains its original regularization.
+    if memorization_mode:
+        x = inputs
+        dropout_rate = 0.0
+    else:
+        augmenter = keras.Sequential(
+            [
+                layers.RandomFlip("horizontal"),
+                layers.RandomRotation(0.06),
+                layers.RandomZoom(0.10),
+                layers.RandomContrast(0.10),
+            ],
+            name="training_augmentation",
+        )
+        x = augmenter(inputs)
+        dropout_rate = 0.30
 
     if model_name == "mobilenetv2":
         backbone = keras.applications.MobileNetV2(
@@ -105,7 +115,8 @@ def build_model(model_name: str, num_classes: int) -> tuple[keras.Model, keras.M
     backbone.trainable = False
     x = backbone(x, training=False)
     x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dropout(0.30)(x)
+    if dropout_rate:
+        x = layers.Dropout(dropout_rate)(x)
     outputs = layers.Dense(num_classes, activation="softmax", name="predictions")(x)
     return keras.Model(inputs, outputs, name=f"{model_name}_waste_classifier"), backbone
 
@@ -129,11 +140,20 @@ def main() -> None:
     class_names = json.loads(class_file.read_text(encoding="utf-8"))
     class_to_index = {name: index for index, name in enumerate(class_names)}
     train_frame = load_manifest(data_dir, "train", class_to_index, args.dataset)
-    val_frame = load_manifest(data_dir, "val", class_to_index, args.dataset)
-    train_ds = make_dataset(train_frame, training=True, batch_size=args.batch_size)
-    val_ds = make_dataset(val_frame, training=False, batch_size=args.batch_size)
+    memorization_mode = args.dataset == "custom"
 
-    model, backbone = build_model(args.model, len(class_names))
+    train_ds = make_dataset(train_frame, training=True, batch_size=args.batch_size)
+    # In Custom mode this is deliberately the same data, for measuring fit to
+    # the memorized set—not for selecting a model that generalizes.
+    monitor_ds = make_dataset(
+        train_frame if memorization_mode else load_manifest(data_dir, "val", class_to_index, args.dataset),
+        training=False,
+        batch_size=args.batch_size,
+    )
+
+    model, backbone = build_model(
+        args.model, len(class_names), memorization_mode=memorization_mode
+    )
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=1e-3),
         loss="sparse_categorical_crossentropy",
@@ -142,10 +162,23 @@ def main() -> None:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     prefix = artifact_prefix(args.dataset)
     checkpoint = MODEL_DIR / f"{prefix}{args.model}_best.keras"
+    monitor_metric = "val_accuracy" if memorization_mode else "val_loss"
     callbacks = [
-        keras.callbacks.ModelCheckpoint(checkpoint, monitor="val_loss", save_best_only=True, verbose=1),
-        keras.callbacks.EarlyStopping(monitor="val_loss", patience=2, restore_best_weights=True),
+        keras.callbacks.ModelCheckpoint(
+            checkpoint,
+            monitor=monitor_metric,
+            mode="max" if memorization_mode else "min",
+            save_best_only=True,
+            verbose=1,
+        )
     ]
+    if not memorization_mode:
+        callbacks.append(
+            keras.callbacks.EarlyStopping(
+                monitor="val_loss", patience=2, restore_best_weights=True
+            )
+        )
+
     class_ids = np.arange(len(class_names))
     weights = compute_class_weight(
         class_weight="balanced",
@@ -157,12 +190,20 @@ def main() -> None:
     }
 
     print(f"Dataset: {args.dataset} | model: {args.model} | CPU training")
+    print(f"Mode: {'memorize all supplied images' if memorization_mode else 'standard TrashNet training'}")
     print(f"Classes: {class_names}")
-    print(f"Train/validation images: {len(train_frame)}/{len(val_frame)}")
+    print(f"Training images: {len(train_frame)}")
+    if memorization_mode:
+        print("Custom mode uses 100% of its images, with no validation/test split, augmentation, or dropout.")
+        print("Reported val_accuracy is measured on the same training images; it is not generalization accuracy.")
     print(f"Class weights: {class_weights}")
     model.fit(
-        train_ds, validation_data=val_ds, epochs=args.head_epochs,
-        callbacks=callbacks, class_weight=class_weights, verbose=1,
+        train_ds,
+        validation_data=monitor_ds,
+        epochs=args.head_epochs,
+        callbacks=callbacks,
+        class_weight=class_weights,
+        verbose=1,
     )
 
     if args.fine_tune_epochs > 0:
@@ -179,8 +220,12 @@ def main() -> None:
             metrics=["accuracy"],
         )
         model.fit(
-            train_ds, validation_data=val_ds, epochs=args.fine_tune_epochs,
-            callbacks=callbacks, class_weight=class_weights, verbose=1,
+            train_ds,
+            validation_data=monitor_ds,
+            epochs=args.fine_tune_epochs,
+            callbacks=callbacks,
+            class_weight=class_weights,
+            verbose=1,
         )
 
     keras.models.load_model(checkpoint)
@@ -191,7 +236,9 @@ def main() -> None:
         "image_size": list(IMAGE_SIZE),
         "weights": str(checkpoint.relative_to(ROOT)),
         "seed": SEED,
-        "augmentation": ["horizontal_flip", "rotation", "zoom", "contrast"],
+        "training_mode": "memorize_all_images_no_holdout" if memorization_mode else "stratified_train_validation_test",
+        "augmentation": [] if memorization_mode else ["horizontal_flip", "rotation", "zoom", "contrast"],
+        "dropout_rate": 0.0 if memorization_mode else 0.30,
     }
     metadata_path = MODEL_DIR / f"{prefix}{args.model}_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

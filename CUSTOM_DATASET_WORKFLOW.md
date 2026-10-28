@@ -1,42 +1,51 @@
-# Custom dataset workflow
+# Custom dataset workflow: memorize all supplied images
 
-The repository contains two independent datasets:
+This repository has two independent datasets:
 
-- TrashNet: `data/raw/dataset-resized/`
-- Custom: `data/custom_images/train/<class>/`
+- TrashNet: \`data/raw/dataset-resized/\`
+- Custom: \`data/custom_images/train/<class>/\`
 
-The Custom dataset currently contains 50 registered PNGs: 10 each in cardboard, glass, metal, paper, and plastic. There are no training examples in a trash folder. In the strict Custom GUI mode, any upload whose canonical decoded RGB pixels do not match one of those registered images is assigned to `trash`. Filenames and file metadata do not matter; resizing, cropping, or changing pixels does change the hash and will therefore use the fallback.
+**Custom mode intentionally does not split the dataset.** Every labelled image is used for training, and evaluation measures how well the model fits those same images. This is a training-set memorization check, not a measure of generalization.
 
-**Do not describe this as 100% ML model accuracy.** The exact-image registry provides deterministic lookup for the registered pixels. The custom ML models are trained and evaluated separately and can still make mistakes.
+The Custom dataset currently has 50 images: 10 each in cardboard, glass, metal, paper, and plastic. It has no labelled \`trash\` examples, so the Custom neural networks learn only those five classes. In the GUI, the separate strict Custom rule returns the folder label for an exact decoded-pixel match and \`trash\` for any unregistered image. This fallback is a policy, not evidence that an unknown image is truly trash.
 
 ## Prepare manifests
 
-```fish
+\`\`\`bash
 python src/prepare_data.py --dataset custom
 python src/prepare_data.py --dataset trashnet
-```
+\`\`\`
 
-Custom manifests are saved under `data/processed/custom/`; existing TrashNet manifests remain under `data/processed/`.
+Custom preparation writes all 50 images to \`data/processed/custom/train.csv\` and removes stale custom \`val.csv\` / \`test.csv\` files from the previous split-based workflow. TrashNet keeps its existing stratified train/validation/test split.
 
-## Train the four dataset/model combinations
+## Train Custom models on 100% of the labelled images
 
-```fish
-python src/train.py --dataset custom --model mobilenetv2 --head-epochs 5 --fine-tune-epochs 3
-python src/train.py --dataset custom --model efficientnetb0 --head-epochs 5 --fine-tune-epochs 3
-python src/train.py --dataset trashnet --model mobilenetv2 --head-epochs 5 --fine-tune-epochs 3
-python src/train.py --dataset trashnet --model efficientnetb0 --head-epochs 5 --fine-tune-epochs 3
-```
+For more time to fit the small dataset, use higher epoch counts:
 
-Custom checkpoints use the `custom_` prefix, so they do not overwrite the existing TrashNet checkpoints.
+\`\`\`bash
+python src/train.py --dataset custom --model mobilenetv2 --head-epochs 40 --fine-tune-epochs 30
+python src/train.py --dataset custom --model efficientnetb0 --head-epochs 40 --fine-tune-epochs 30
+\`\`\`
 
-## Evaluate and launch
+Custom mode disables data augmentation and dropout to make memorization easier. The same 50 images are used for training and training-set monitoring. This can overfit by design, but 100% neural-network accuracy is not guaranteed.
 
-```fish
+Custom checkpoints use the \`custom_\` prefix and do not overwrite TrashNet checkpoints.
+
+## Evaluate Custom memorization and standard TrashNet testing
+
+\`\`\`bash
 python src/evaluate.py --dataset custom --model mobilenetv2
 python src/evaluate.py --dataset custom --model efficientnetb0
 python src/evaluate.py --dataset trashnet --model mobilenetv2
 python src/evaluate.py --dataset trashnet --model efficientnetb0
-python src/app.py
-```
+\`\`\`
 
-The GUI provides independent Dataset and Model selectors. In Custom mode it displays the strict registry result and the selected model prediction separately. The registry self-check in evaluation reports whether the saved custom images resolve to their assigned folder labels; it is not a generalization metric.
+Custom evaluation reads \`data/processed/custom/train.csv\` and explicitly reports **training-set memorization accuracy**, not held-out test accuracy.
+
+## Launch GUI
+
+\`\`\`bash
+python src/app.py
+\`\`\`
+
+Choose Dataset and Model independently. In Custom mode, the GUI displays the strict exact-image registry result separately from the model prediction. Canonical pixel matching ignores filenames and metadata, but resizing, cropping, recompressing, or editing pixels can make an image no longer match the registered hash.
