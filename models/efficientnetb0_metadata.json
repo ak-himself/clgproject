@@ -1,4 +1,5 @@
 {
+  "dataset": "trashnet",
   "model": "efficientnetb0",
   "class_names": [
     "cardboard",
@@ -13,5 +14,11 @@
     224
   ],
   "weights": "models/efficientnetb0_best.keras",
-  "seed": 42
+  "seed": 42,
+  "augmentation": [
+    "horizontal_flip",
+    "rotation",
+    "zoom",
+    "contrast"
+  ]
 }
