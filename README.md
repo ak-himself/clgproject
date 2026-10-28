@@ -1,100 +1,160 @@
 # Waste Classification Lab
 
-A Python/TensorFlow image-classification project that compares two image datasets and two transfer-learning models through a Gradio web interface.
+<p align="center">
+  <strong>TrashNet + Custom Dataset · MobileNetV2 + EfficientNetB0 · Gradio</strong>
+</p>
 
-- **Datasets:** TrashNet and Custom
-- **Models:** MobileNetV2 and EfficientNetB0
-- **Interface:** Gradio GUI for single-image prediction, batch prediction, and model comparison
-- **Runtime:** Python 3.12, TensorFlow, CPU-compatible
+A Python and TensorFlow project for classifying waste images. The application lets users select a dataset and model, classify one or more images, and compare both model architectures.
 
-Repository: https://github.com/ak-himself/clgproject
+[Repository](https://github.com/ak-himself/clgproject) · [TrashNet source](https://github.com/garythung/trashnet)
 
 ---
 
-## 1. Team members and responsibilities
+## Contents
+
+- [Team and ownership](#team-and-ownership)
+- [Project workflow](#project-workflow)
+- [Repository structure](#repository-structure)
+- [File reference](#file-reference)
+- [Setup](#setup)
+- [Prepare datasets](#prepare-datasets)
+- [Train models](#train-models)
+- [Evaluate models](#evaluate-models)
+- [Run the GUI](#run-the-gui)
+- [Share the GUI with Cloudflare Tunnel](#share-the-gui-with-cloudflare-tunnel)
+- [Git workflow](#git-workflow)
+- [Limitations and interpretation](#limitations-and-interpretation)
+
+## Team and ownership
+
+The project has five members. Each role has a primary area of responsibility; integration and final verification are shared.
 
 ### 1. Parteek — Project Lead & System Integration
-**Enrollment:** S24CSEU2232
 
-Responsibilities:
-- Coordinate project milestones and divide work among team members.
-- Maintain the overall architecture and keep the TrashNet and Custom workflows consistent.
-- Integrate dataset preparation, training, evaluation, and GUI modules.
-- Review Git changes, resolve merge/integration problems, and maintain the repository.
-- Check that the application can be run from the documented commands.
-- Coordinate the final demonstration and project documentation.
+**Enrollment:** `S24CSEU2232`
+
+**Responsibilities**
+- Coordinate milestones, divide tasks, and track completion.
+- Maintain the overall architecture and ensure TrashNet and Custom remain separate.
+- Integrate dataset preparation, training, evaluation, GUI, and deployment workflows.
+- Review repository changes, resolve integration issues, and coordinate final testing.
+- Maintain project documentation and prepare the final demonstration.
+
+**Primary files**
+- `README.md` — project documentation and workflow.
+- `CUSTOM_DATASET_WORKFLOW.md` — quick reference for the Custom workflow.
+- `.gitignore` — repository hygiene and local-data exclusions.
+- All files under `src/` during integration and review.
 
 ### 2. Deep Jaiswal — Dataset & Data Preprocessing Engineer
-**Enrollment:** S24CSEU2561
 
-Responsibilities:
-- Maintain the expected folder structure for TrashNet and Custom images.
-- Verify that each image is placed in the folder corresponding to its intended class.
-- Check for unreadable images, duplicates, incorrect labels, and inconsistent class-folder names.
-- Run the dataset preparation script and inspect generated manifests and class counts.
-- Preserve the separation between the original TrashNet dataset and the curated Custom dataset.
-- Document dataset sources and avoid redistributing third-party images without permission.
+**Enrollment:** `S24CSEU2561`
+
+**Responsibilities**
+- Maintain the expected class-folder structures for TrashNet and Custom.
+- Check image readability, class labels, duplicates, and unexpected files.
+- Prepare manifests and verify per-class image counts before training.
+- Keep the TrashNet train/validation/test split separate from the all-images Custom workflow.
+- Document dataset sources and avoid redistributing images without permission.
+
+**Primary files**
+- `src/prepare_data.py` — scans image folders and generates manifests.
+- `src/image_registry.py` — builds the exact-pixel lookup for Custom images.
+- `data/raw/dataset-resized/` — local TrashNet source images.
+- `data/custom_images/train/` — Custom class folders.
+- `data/processed/` — generated manifests and class metadata.
 
 ### 3. Manasvi — MobileNetV2 Model Engineer
-**Enrollment:** S24CSEU0221
 
-Responsibilities:
+**Enrollment:** `S24CSEU0221`
+
+**Responsibilities**
 - Train and maintain the MobileNetV2 model for both datasets.
-- Tune training epochs and other supported training options.
-- Review training-set memorization results for Custom and held-out test results for TrashNet.
-- Inspect MobileNetV2 reports and confusion matrices to identify misclassified classes.
-- Keep the model checkpoint and metadata consistent with the selected dataset.
-- Record the exact commands and results used in the final demonstration.
+- Tune head-training and fine-tuning epochs using the supported command-line options.
+- Inspect Custom training-set memorization results and TrashNet held-out test results.
+- Review per-class metrics and confusion matrices, and record misclassifications.
+- Keep checkpoint files and metadata consistent with the selected dataset.
+
+**Primary files**
+- `src/train.py` — shared model-building and training pipeline.
+- `src/evaluate.py` — model evaluation and report generation.
+- `models/mobilenetv2_best.keras` and `models/mobilenetv2_metadata.json` — TrashNet artifacts.
+- `models/custom_mobilenetv2_best.keras` and `models/custom_mobilenetv2_metadata.json` — Custom artifacts.
+- Matching MobileNetV2 reports under `reports/`.
 
 ### 4. Ankit Kumar — EfficientNetB0 Model Engineer
-**Enrollment:** S24CSEU0910
 
-Responsibilities:
+**Enrollment:** `S24CSEU0910`
+
+**Responsibilities**
 - Train and maintain the EfficientNetB0 model for both datasets.
-- Tune training epochs and other supported training options.
-- Review Custom training-set memorization results and TrashNet held-out test results.
-- Inspect the EfficientNetB0 classification report and confusion matrix.
-- Compare results and inference time with MobileNetV2.
-- Ensure that EfficientNetB0 checkpoint files and metadata are saved under the correct dataset-specific names.
+- Tune training epochs and batch size where appropriate.
+- Inspect Custom training-set memorization results and TrashNet held-out test results.
+- Compare EfficientNetB0 metrics and inference time with MobileNetV2.
+- Ensure dataset-specific checkpoints and metadata are saved to the correct paths.
+
+**Primary files**
+- `src/train.py` — shared training pipeline, including EfficientNetB0.
+- `src/evaluate.py` — metrics and confusion-matrix generation.
+- `models/efficientnetb0_best.keras` and `models/efficientnetb0_metadata.json` — TrashNet artifacts.
+- `models/custom_efficientnetb0_best.keras` and `models/custom_efficientnetb0_metadata.json` — Custom artifacts.
+- Matching EfficientNetB0 reports under `reports/`.
 
 ### 5. Vansh Jain — Evaluation, GUI & Deployment Engineer
-**Enrollment:** S24CSEU0161
 
-Responsibilities:
-- Run evaluation scripts for both models and both datasets.
-- Compare accuracy, macro F1, inference latency, and confusion matrices.
-- Test single-image upload, batch-image upload, dataset selection, model selection, and the compare-both-models option.
-- Verify that the Custom exact-image registry result is displayed separately from the neural-network prediction.
-- Launch the Gradio application and create a temporary public URL with Cloudflare Tunnel for demonstrations.
-- Test the app from the public URL and explain deployment limitations, including that a temporary tunnel URL changes when restarted.
+**Enrollment:** `S24CSEU0161`
 
----
+**Responsibilities**
+- Run and compare evaluation results for both architectures and datasets.
+- Test dataset selection, model selection, single-image uploads, batch uploads, and model comparison.
+- Verify that Custom exact-image registry results are shown separately from neural-network predictions.
+- Check inference latency, report output, and missing-model error handling.
+- Run the Gradio interface and expose it temporarily through Cloudflare Tunnel for demonstrations.
+- Explain the limitations and security implications of a public temporary URL.
 
-## 2. Project workflow
-
-The main workflow is:
-
-1. **Collect and label images.** Keep each image inside its intended class folder.
-2. **Prepare manifests.** The preparation script records image paths and labels. TrashNet is split into train/validation/test sets; Custom uses all labelled images for training.
-3. **Train the models.** Train MobileNetV2 and EfficientNetB0 separately for each dataset. The model names and dataset names determine separate checkpoint paths.
-4. **Evaluate.** Custom evaluation measures how closely each neural network fits the same images it trained on. TrashNet evaluation uses the held-out test split.
-5. **Launch the GUI.** Select the dataset and model, upload one or more images, and inspect predictions.
-6. **Use strict Custom matching when required.** In Custom mode, the exact-image registry returns the saved folder label when the uploaded image has the same canonical decoded RGB pixels as a registered image. An image without an exact match falls back to \`trash\` according to the project's chosen policy.
-7. **Deploy temporarily.** Expose the local Gradio port with Cloudflare Tunnel for a demonstration.
-
-### Important: what “100%” means in Custom mode
-
-The Custom workflow intentionally uses 100% of the labelled images for training; it does not reserve a validation or test split. Custom evaluation therefore reports **training-set memorization accuracy**, not generalization or unseen-image accuracy.
-
-The exact-image registry is a separate lookup mechanism. It can return the folder label for an exact pixel match regardless of the neural network's prediction. A resized, cropped, recompressed, or edited image may no longer match. Unmatched images are assigned \`trash\` by policy; this does not establish that they are actually trash.
-
-The current Custom dataset has 10 images in each of the five non-trash folders (50 images total) and no labelled images in \`trash/\`. Thus, the Custom neural networks learn five classes; \`trash\` is currently the strict registry's fallback label, not a learned Custom class.
+**Primary files**
+- `src/evaluate.py` — evaluation metrics and confusion matrices.
+- `src/app.py` — Gradio interface and model inference.
+- `src/image_registry.py` — exact-pixel matching used in Custom mode.
+- `reports/` — evaluation results.
+- `requirements.txt` — application dependencies.
 
 ---
 
-## 3. Repository structure and what each file does
+## Project workflow
 
-\`\`\`text
+1. **Organize and label images.** Place each image in its intended class folder.
+2. **Prepare the manifests.** Run `src/prepare_data.py` to generate CSVs and class metadata.
+3. **Train each architecture separately.** Train MobileNetV2 and EfficientNetB0 for TrashNet and Custom. Their checkpoints use different names.
+4. **Evaluate.** Custom is measured against the same images used for training; TrashNet is measured against its held-out test set.
+5. **Launch the GUI.** Select the dataset and model, upload images, and inspect predictions or compare both models.
+6. **Test Custom exact matching.** The registry looks for the same canonical decoded RGB pixels as a registered image.
+7. **Demonstrate remotely if needed.** Start a temporary Cloudflare Tunnel while the local app is running.
+
+### Dataset behaviour
+
+| Setting | TrashNet | Custom |
+|---|---|---|
+| Source directory | `data/raw/dataset-resized/` | `data/custom_images/train/` |
+| Training data | Approximately 70% split | 100% of labelled images |
+| Validation data | Approximately 15% split | No separate split |
+| Test data | Approximately 15% held out | No held-out test set |
+| Evaluation meaning | Held-out test performance | Training-set memorization check |
+| Checkpoint prefix | No prefix | `custom_` |
+
+**Custom is deliberately a memorization workflow.** All labelled Custom images are used for training; Custom evaluation therefore measures fit to those same images and does not demonstrate generalization to unseen images. More epochs do not guarantee 100% neural-network accuracy.
+
+The current Custom collection has 10 images in each of five folders—cardboard, glass, metal, paper, and plastic—for 50 images total. Its `trash/` folder is empty. The Custom neural networks therefore learn five classes, not a learned trash class.
+
+In the GUI, the Custom exact-image registry is a separate mechanism: it returns the folder label for a registered image whose orientation-corrected RGB pixels and dimensions match exactly. Filename and file metadata do not determine the match. Resizing, cropping, recompressing, or editing pixels can break the match. An unregistered image is assigned `trash` by the requested fallback policy; this does not prove that the image is actually trash.
+
+---
+
+## Repository structure
+
+The tree below shows the main source files and the locations where datasets and generated artifacts are expected. Some directories and files are created only after running the preparation, training, or evaluation commands.
+
+```text
 clgproject/
 ├── README.md
 ├── CUSTOM_DATASET_WORKFLOW.md
@@ -108,18 +168,30 @@ clgproject/
 │   └── evaluate.py
 ├── data/
 │   ├── raw/
-│   │   └── dataset-resized/       # Local TrashNet class folders
+│   │   └── dataset-resized/
+│   │       ├── cardboard/
+│   │       ├── glass/
+│   │       ├── metal/
+│   │       ├── paper/
+│   │       ├── plastic/
+│   │       └── trash/
 │   ├── custom_images/
-│   │   └── train/                 # Custom class folders
+│   │   └── train/
+│   │       ├── cardboard/
+│   │       ├── glass/
+│   │       ├── metal/
+│   │       ├── paper/
+│   │       ├── plastic/
+│   │       └── trash/
 │   └── processed/
-│       ├── train.csv              # TrashNet training manifest
-│       ├── val.csv                # TrashNet validation manifest
-│       ├── test.csv               # TrashNet test manifest
-│       ├── class_names.json       # TrashNet class order
-│       ├── dataset_metadata.json # TrashNet dataset/split summary
+│       ├── train.csv
+│       ├── val.csv
+│       ├── test.csv
+│       ├── class_names.json
+│       ├── dataset_metadata.json
 │       └── custom/
-│           ├── train.csv          # All labelled Custom images
-│           ├── class_names.json   # Custom class order
+│           ├── train.csv
+│           ├── class_names.json
 │           └── dataset_metadata.json
 ├── models/
 │   ├── mobilenetv2_best.keras
@@ -139,243 +211,252 @@ clgproject/
     ├── custom_mobilenetv2_confusion_matrix.png
     ├── custom_efficientnetb0_metrics.json
     └── custom_efficientnetb0_confusion_matrix.png
-\`\`\`
-
-The tree above describes the principal files and generated artifacts. Some files are created only after running preparation, training, or evaluation. Dataset images and model files may be ignored by Git or present locally depending on repository configuration.
-
-### Source files
-
-| File | Purpose |
-|---|---|
-| \`src/app.py\` | Builds and launches the Gradio interface. Loads the four dataset/model combinations when available, provides dataset and model dropdowns, single-image and batch inputs, optional comparison, prediction scores, and latency. In Custom mode it displays the strict registry result separately from model predictions. Restart the app after retraining to load updated checkpoints. |
-| \`src/image_registry.py\` | Creates a lookup table for Custom images using a SHA-256 hash of orientation-corrected, decoded RGB pixels and image dimensions. Filenames and metadata are not used as identity. Conflicting labels for identical pixels are treated as \`trash\`. |
-| \`src/prepare_data.py\` | Scans class folders, creates labelled CSV manifests, writes class-name and dataset metadata JSON files, and prepares data for training. TrashNet gets stratified train/validation/test splits; Custom puts all labelled images into \`train.csv\` and removes stale Custom validation/test CSVs. |
-| \`src/train.py\` | Loads manifests and image data, builds MobileNetV2 or EfficientNetB0 transfer-learning models, trains the classification head, optionally fine-tunes the last backbone layers, and saves the best checkpoint plus metadata. Custom mode disables augmentation and dropout to encourage memorization. |
-| \`src/evaluate.py\` | Loads a saved checkpoint, predicts labels, calculates accuracy, macro F1, classification-report metrics, and mean inference time, and saves a JSON report and confusion-matrix PNG. Custom uses all training images for a memorization check; TrashNet uses its held-out test manifest. |
-| \`requirements.txt\` | Lists the Python packages required for TensorFlow training, image processing, metrics, plotting, and the Gradio GUI. |
-| \`.gitignore\` | Excludes Python caches, environment files, selected local dataset folders and temporary artifacts. Check its rules before adding large image datasets or generated files. |
-| \`CUSTOM_DATASET_WORKFLOW.md\` | Quick reference for the separate dataset workflow, training commands, evaluation commands, and Custom memorization behaviour. |
-| \`README.md\` | Main project documentation: team responsibilities, architecture, file guide, setup, commands, and limitations. |
-
-### Generated data and model artifacts
-
-- \`data/processed/train.csv\`, \`val.csv\`, and \`test.csv\`: TrashNet image paths and labels for the three splits.
-- \`data/processed/custom/train.csv\`: all labelled Custom image paths and labels; no holdout split is used.
-- \`class_names.json\`: class ordering used to translate model output indices into labels.
-- \`dataset_metadata.json\`: dataset source, class counts, and split configuration.
-- \`models/*_best.keras\`: trained Keras model checkpoints.
-- \`models/*_metadata.json\`: dataset name, model name, class ordering, image size, checkpoint path, and training-mode information.
-- \`reports/*_metrics.json\`: numeric evaluation metrics and per-class classification report.
-- \`reports/*_confusion_matrix.png\`: visual comparison of true and predicted labels.
-
-Do not rename a checkpoint without updating the code that expects that filename. The \`custom_\` prefix keeps Custom checkpoints separate from the original TrashNet checkpoints.
+```
 
 ---
 
-## 4. Setup
+## File reference
 
-These commands assume the project is at \`/home/ak/Code/clgproject\` on CachyOS and Python 3.12.8 is available through pyenv. Adjust the path if the repository is elsewhere.
+### Source code
 
-\`\`\`fish
+| File | What it does | Main users |
+|---|---|---|
+| `src/app.py` | Creates the Gradio interface. Loads available dataset/model checkpoints and metadata, preprocesses uploaded images, runs predictions, displays scores and latency, supports batch predictions and comparing both models, and shows the Custom registry result separately. | Vansh, Parteek |
+| `src/image_registry.py` | Canonicalizes an image with EXIF orientation correction and RGB conversion, hashes its dimensions and pixel bytes using SHA-256, and builds a hash-to-label map from Custom class folders. If identical pixels are assigned conflicting labels, the registry maps that hash to `trash`. | Deep, Vansh |
+| `src/prepare_data.py` | Scans the dataset folders, normalizes folder names into labels, writes CSV manifests, saves class order and dataset metadata, and applies the dataset-specific preparation policy. TrashNet is stratified into train/validation/test; Custom puts all labelled images into `train.csv` and deletes stale Custom `val.csv`/`test.csv` files. | Deep, Parteek |
+| `src/train.py` | Loads the training manifest, decodes and resizes images to 224×224, builds MobileNetV2 or EfficientNetB0 with a classification head, trains the head and optionally fine-tunes the final backbone layers, and saves the best checkpoint and metadata. Custom mode disables augmentation and dropout. | Manasvi, Ankit |
+| `src/evaluate.py` | Loads a checkpoint and manifest, predicts in batches, calculates accuracy, macro F1 and per-class metrics, measures mean inference latency, and writes a JSON report and confusion-matrix image. Custom evaluates on its training manifest; TrashNet evaluates on the held-out test manifest. | Manasvi, Ankit, Vansh |
+
+### Configuration and documentation
+
+| File or directory | What it contains |
+|---|---|
+| `README.md` | Main project guide: team ownership, workflow, file descriptions, setup, commands, and limitations. |
+| `CUSTOM_DATASET_WORKFLOW.md` | Short operational guide focused on the Custom memorization workflow. |
+| `requirements.txt` | Python dependencies: TensorFlow, NumPy, pandas, scikit-learn, Matplotlib, Pillow, and Gradio. |
+| `.gitignore` | Rules for excluding local environments, caches, selected dataset paths, and temporary artifacts from Git. Always check it before adding large image collections. |
+| `data/raw/dataset-resized/` | Local TrashNet image folders. |
+| `data/custom_images/train/` | Local Custom image folders. |
+| `data/processed/` | Generated CSV manifests, class ordering, and dataset metadata. |
+| `models/` | Keras checkpoints and per-model metadata. TrashNet files have no dataset prefix; Custom files start with `custom_`. |
+| `reports/` | JSON evaluation metrics and PNG confusion matrices for each dataset/model combination. |
+
+### Generated files
+
+| Artifact | Purpose |
+|---|---|
+| `train.csv`, `val.csv`, `test.csv` | TrashNet paths and ground-truth labels for its three splits. |
+| `custom/train.csv` | All labelled Custom image paths and labels, with no held-out split. |
+| `class_names.json` | Ordered class names used to map model output indices back to labels. |
+| `dataset_metadata.json` | Dataset name, source path, class counts, and split configuration. |
+| `*_best.keras` | Saved trained Keras model. |
+| `*_metadata.json` | Dataset/model identity, class order, image size, and other model metadata used by the GUI. |
+| `*_metrics.json` | Evaluation type, sample count, accuracy, macro F1, inference time, and per-class report. |
+| `*_confusion_matrix.png` | Plot of true labels versus predicted labels. |
+
+---
+
+## Setup
+
+Commands below assume CachyOS, Fish shell, pyenv Python 3.12.8, and the project directory `/home/ak/Code/clgproject`. Change the path or Python version if your setup differs.
+
+```fish
 cd /home/ak/Code/clgproject
 pyenv shell 3.12.8
 python --version
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-\`\`\`
+```
 
-A dedicated virtual environment is recommended for reproducibility. The commands above use the currently selected pyenv interpreter because that is the project's established local setup.
+A dedicated virtual environment is recommended for reproducible project dependencies. The commands above use the established local pyenv interpreter.
 
-Check Python syntax before training:
+Check syntax for all Python modules:
 
-\`\`\`fish
+```fish
 python -m py_compile src/image_registry.py src/prepare_data.py src/train.py src/evaluate.py src/app.py
-\`\`\`
+```
 
 ---
 
-## 5. Dataset preparation commands
+## Prepare datasets
 
-Run these from the repository root.
+Run commands from the repository root.
 
-### Prepare Custom
+### Custom
 
-\`\`\`fish
+```fish
 python src/prepare_data.py --dataset custom
-\`\`\`
+```
 
-This creates \`data/processed/custom/train.csv\`, \`class_names.json\`, and \`dataset_metadata.json\`. It uses all labelled images found under \`data/custom_images/train/<class>/\`.
+Reads images from `data/custom_images/train/<class>/` and writes the complete training manifest to `data/processed/custom/train.csv`. Every labelled image is included.
 
-### Prepare TrashNet
+### TrashNet
 
-\`\`\`fish
+```fish
 python src/prepare_data.py --dataset trashnet
-\`\`\`
+```
 
-This creates the standard \`data/processed/train.csv\`, \`val.csv\`, \`test.csv\`, class names, and dataset metadata. TrashNet uses an approximately 70% / 15% / 15% stratified split.
+Reads images from `data/raw/dataset-resized/<class>/` and writes the stratified train, validation, and test manifests under `data/processed/`.
 
-Check the class folders and labels before training. A wrong folder name becomes a wrong target label.
+Inspect class counts and confirm the labels before training. Folder names are used as ground-truth labels.
 
 ---
 
-## 6. Training commands
+## Train models
 
-### Train Custom models on all labelled images
+### Custom: train on all labelled images
 
-These commands use all Custom images. The higher epoch counts are examples from the memorization workflow; training still may not reach 100% neural-network accuracy.
-
-\`\`\`fish
+```fish
 python src/train.py --dataset custom --model mobilenetv2 --head-epochs 40 --fine-tune-epochs 30
 python src/train.py --dataset custom --model efficientnetb0 --head-epochs 40 --fine-tune-epochs 30
-\`\`\`
+```
 
-Custom checkpoints:
-- \`models/custom_mobilenetv2_best.keras\`
-- \`models/custom_efficientnetb0_best.keras\`
+### TrashNet: standard training
 
-Custom metadata:
-- \`models/custom_mobilenetv2_metadata.json\`
-- \`models/custom_efficientnetb0_metadata.json\`
+These commands train or replace the existing TrashNet checkpoints:
 
-### Train TrashNet models
-
-These commands train or replace the TrashNet checkpoints. Run them only when you intend to retrain those models.
-
-\`\`\`fish
+```fish
 python src/train.py --dataset trashnet --model mobilenetv2 --head-epochs 5 --fine-tune-epochs 3
 python src/train.py --dataset trashnet --model efficientnetb0 --head-epochs 5 --fine-tune-epochs 3
-\`\`\`
+```
 
-TrashNet checkpoints:
-- \`models/mobilenetv2_best.keras\`
-- \`models/efficientnetb0_best.keras\`
+### Training options
 
-### Training arguments
+- `--dataset`: `custom` or `trashnet`.
+- `--model`: `mobilenetv2` or `efficientnetb0`.
+- `--head-epochs`: number of epochs for training the classification head.
+- `--fine-tune-epochs`: number of fine-tuning epochs; set to `0` to skip fine-tuning.
+- `--batch-size`: images per batch; default is `16`.
 
-- \`--dataset\`: \`custom\` or \`trashnet\`.
-- \`--model\`: \`mobilenetv2\` or \`efficientnetb0\`.
-- \`--head-epochs\`: number of epochs for training the classification head.
-- \`--fine-tune-epochs\`: number of epochs for fine-tuning the final backbone layers; use \`0\` to skip fine-tuning.
-- \`--batch-size\`: number of images per batch; default is 16.
-
-TensorFlow may print CUDA/GPU warnings on a CPU-only machine. If training completes and saves the model, these warnings alone do not indicate training failure.
+TrashNet training uses augmentation and validation-based early stopping. Custom mode uses all Custom images and disables augmentation/dropout to make memorization easier. The reported Custom monitoring accuracy is measured on those same training images.
 
 ---
 
-## 7. Evaluation commands
+## Evaluate models
 
-### Evaluate Custom
+### Custom: training-set memorization check
 
-\`\`\`fish
+```fish
 python src/evaluate.py --dataset custom --model mobilenetv2
 python src/evaluate.py --dataset custom --model efficientnetb0
-\`\`\`
+```
 
-Custom evaluation uses \`data/processed/custom/train.csv\`, so its accuracy is **training-set memorization accuracy**.
+### TrashNet: held-out test evaluation
 
-### Evaluate TrashNet
-
-\`\`\`fish
+```fish
 python src/evaluate.py --dataset trashnet --model mobilenetv2
 python src/evaluate.py --dataset trashnet --model efficientnetb0
-\`\`\`
+```
 
-TrashNet evaluation uses \`data/processed/test.csv\`, which is held out from training.
-
-Reports are saved in \`reports/\`. Custom reports have the \`custom_\` prefix. The exact registry self-check is a separate check of image-to-folder mapping and must not be reported as neural-network accuracy.
+Reports and confusion matrices are written under `reports/`. Custom report names start with `custom_`. The exact registry self-check is reported separately and is **not** neural-network accuracy.
 
 ---
 
-## 8. Launch and test the GUI
+## Run the GUI
 
-In **Terminal 1**, start the app:
+Start the app in **Terminal 1**:
 
-\`\`\`fish
+```fish
 cd /home/ak/Code/clgproject
 pyenv shell 3.12.8
 python src/app.py
-\`\`\`
+```
 
-Gradio normally prints a local URL such as \`http://127.0.0.1:7860\`. Keep this terminal running while using the app.
+Open the local URL printed by Gradio, normally `http://127.0.0.1:7860`.
 
-In the GUI:
+### GUI test checklist
+
 1. Select **TrashNet** or **Custom**.
 2. Select **MobileNetV2** or **EfficientNetB0**.
-3. Optionally enable **Compare both models**.
-4. Upload one image or multiple image files.
-5. Click **Classify image(s)**.
-6. Inspect the final result, model predictions, model scores, top predictions, and inference latency.
-7. For Custom, check the strict registry result separately from the neural-network predictions.
+3. Enable **Compare both models** to compare both backbones for the selected dataset.
+4. Upload one image and run classification.
+5. Upload multiple images and check the batch results table.
+6. In Custom mode, compare the strict registry label with each neural-network prediction.
+7. Verify scores, top predictions, latency, and any model-loading error message.
 
-After retraining, stop the old GUI with \`Ctrl+C\` and launch \`python src/app.py\` again so the process reloads the updated model checkpoints.
+The GUI loads models when it starts. After retraining, stop the old process with `Ctrl+C` and run `python src/app.py` again to load the updated checkpoints.
 
 ---
 
-## 9. Cloudflare Tunnel commands for a temporary public URL
+## Share the GUI with Cloudflare Tunnel
 
-A temporary Cloudflare Quick Tunnel does not require configuring a named tunnel or adding a domain. Install \`cloudflared\` first if it is not already available.
+A Quick Tunnel provides a temporary public URL without requiring a configured domain or a named tunnel.
 
-**Keep the Gradio application running in Terminal 1.** Open **Terminal 2** and run:
+### Terminal 1 — run Gradio
 
-\`\`\`fish
+```fish
+cd /home/ak/Code/clgproject
+pyenv shell 3.12.8
+python src/app.py
+```
+
+### Terminal 2 — create the tunnel
+
+Keep Gradio running, open a second terminal, and run:
+
+```fish
 cloudflared tunnel --url http://127.0.0.1:7860
-\`\`\`
+```
 
-Wait for \`cloudflared\` to print a public URL ending in \`.trycloudflare.com\`. Open that URL on the device you want to use for the demo. Leave both terminals running: one for Gradio and one for Cloudflare Tunnel.
+Wait for `cloudflared` to print a public URL ending in `.trycloudflare.com`, then open that URL on the demonstration device. Keep both terminals open for as long as the app is needed.
 
-Useful checks:
+### Troubleshooting and stopping
 
-\`\`\`fish
-# Confirm cloudflared is installed
+Check that Cloudflare Tunnel is installed:
+
+```fish
 cloudflared --version
+```
 
-# Confirm the local Gradio endpoint responds (run while the app is up)
+Check that the local Gradio server responds:
+
+```fish
 curl -I http://127.0.0.1:7860
-\`\`\`
+```
 
-To stop the tunnel, press \`Ctrl+C\` in Terminal 2. To stop the GUI, press \`Ctrl+C\` in Terminal 1. A new Quick Tunnel normally receives a different random URL when restarted. A stable custom hostname requires a Cloudflare-managed domain and a configured named tunnel.
+Stop the tunnel with `Ctrl+C` in Terminal 2. Stop Gradio with `Ctrl+C` in Terminal 1. Restarting a Quick Tunnel generally creates a different random URL. A stable custom hostname requires a Cloudflare-managed domain and a configured named tunnel.
 
-**Security note:** Anyone who obtains the temporary public URL may be able to access the exposed application. Do not use the public tunnel for private images, confidential data, or an app that should be restricted to your team. Stop the tunnel when the demonstration is over.
+**Security:** Anyone who obtains the public URL may be able to access the application. Use the temporary tunnel only for suitable demonstrations, do not upload confidential images, and stop the tunnel when finished.
 
 ---
 
-## 10. Git commands
+## Git workflow
 
-Check local changes:
+Check your changes before committing:
 
-\`\`\`fish
+```fish
 git status --short
 git diff --check
-\`\`\`
+```
 
-Pull the latest shared changes:
+Pull shared changes:
 
-\`\`\`fish
+```fish
 git pull --ff-only origin main
-\`\`\`
+```
 
-After reviewing your own changes, stage and commit them:
+After reviewing the changes, commit and push the documentation:
 
-\`\`\`fish
+```fish
 git add README.md
-git commit -m "Update project documentation and team responsibilities"
+git commit -m "Improve project README and file documentation"
 git push origin main
-\`\`\`
+```
 
-If you changed other files, stage only the intended paths or review \`git status\` carefully before committing. Do not commit API keys, private files, or datasets that you do not have permission to redistribute.
+If other files changed, stage only the intended files. Do not commit API keys, private files, or image datasets that you are not permitted to redistribute.
 
 ---
 
-## 11. Known limitations
+## Limitations and interpretation
 
-- The classifier predicts one label for the whole image; it is not an object-detection system for multiple objects in a scene.
-- A model's confidence/score is not a guarantee that its prediction is correct.
-- Custom accuracy is measured on the same images used for training, so it does not demonstrate generalization to unseen or modified images.
-- Custom currently has no labelled \`trash\` examples. Its unmatched-image fallback is a rule, not a learned class prediction.
-- Exact image matching depends on decoded pixels. Resizing, cropping, recompressing, or editing an image may prevent a match.
-- CPU inference and training may be slower than GPU-backed execution.
-- The temporary Cloudflare URL is intended for demonstrations, not permanent production hosting.
+- The application classifies the whole image; it does not detect and label multiple objects within one scene.
+- Model scores are not guarantees of correctness.
+- Custom training accuracy measures fit to the training images and does not establish generalization to unseen, resized, edited, or recompressed photos.
+- Custom currently has no labelled `trash` training examples. Its strict registry fallback is a fixed policy, not a learned trash prediction.
+- Exact-image registry matching depends on decoded RGB pixel content and dimensions.
+- CPU training and inference may be slower than GPU-backed execution.
+- Cloudflare Quick Tunnel URLs are temporary and should not be treated as permanent production hosting.
 
-## 12. Dataset acknowledgement
+## Dataset acknowledgement
 
-The project uses the [TrashNet dataset](https://github.com/garythung/trashnet). Cite the dataset in reports and review its reuse terms. Do not redistribute downloaded or third-party Custom images unless the applicable license or permission allows it.
+The project uses [TrashNet](https://github.com/garythung/trashnet). Cite the dataset in reports and review its reuse terms. Do not redistribute third-party images unless their license or permission allows it.
