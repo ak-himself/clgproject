@@ -92,6 +92,7 @@ def build_model(model_name: str, num_classes: int) -> tuple[keras.Model, keras.M
 
 
 def main() -> None:
+    global BATCH_SIZE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=["mobilenetv2", "efficientnetb0"], required=True)
     parser.add_argument("--head-epochs", type=int, default=5)
@@ -99,7 +100,6 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     args = parser.parse_args()
 
-    global BATCH_SIZE
     BATCH_SIZE = args.batch_size
     set_seeds()
 
