@@ -1,20 +1,22 @@
-# Waste Classification with Transfer Learning
+# Waste Classification Lab
 
-Train and compare MobileNetV2 and EfficientNetB0 on TrashNet, evaluate them on a held-out test split, and test new images through a Gradio GUI.
+A reproducible waste-image classification project comparing ImageNet-pretrained MobileNetV2 and EfficientNetB0 on two datasets:
+- **TrashNet:** small, controlled-background baseline.
+- **RealWaste:** images captured in an authentic landfill environment.
 
-## Stack
+The project evaluates on held-out test splits and provides a Gradio GUI for uploading individual images.
 
-- Python 3.12
-- TensorFlow/Keras (CPU is supported)
-- MobileNetV2 and EfficientNetB0 pretrained on ImageNet
-- scikit-learn, pandas, Matplotlib
-- Gradio image-upload interface
+## Why transfer learning?
 
-## Dataset
+The Keras MobileNetV2 and EfficientNetB0 backbones use weights pretrained on ImageNet. We replace their original 1,000-class classifier heads with task-specific heads and fine-tune them on each waste dataset. We do not train either backbone from scratch.
 
-This project uses the six-class [TrashNet dataset](https://github.com/garythung/trashnet): cardboard, glass, metal, paper, plastic, and trash.
+## Datasets
 
-Download the resized dataset archive and extract it so the folder layout is:
+### TrashNet (baseline)
+
+The [original TrashNet dataset](https://github.com/garythung/trashnet) contains 2,527 images across cardboard, glass, metal, paper, plastic, and trash. Most images use a plain posterboard background, so results should not be treated as evidence of robust real-world performance.
+
+Expected local path:
 
 ```text
 data/raw/dataset-resized/
@@ -26,90 +28,82 @@ data/raw/dataset-resized/
 └── trash/
 ```
 
-The dataset and all generated model files are intentionally excluded from Git.
+### RealWaste (realistic primary dataset)
 
-## Setup (CachyOS / Linux, fish shell)
+[RealWaste on the UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/908/realwaste) provides 4,752 images captured at the point of reception in a landfill. Its nine material categories are cardboard, food organics, glass, metal, miscellaneous trash, paper, plastic, textile trash, and vegetation.
 
-Activate your existing Python 3.12.8 installation:
+Download the UCI archive from its dataset page, then extract it under `data/raw/realwaste/`. The preparation script searches nested folders to locate the class directories. Do not upload the dataset or model checkpoints to Git.
+
+## Environment
+
+Use Python 3.12.8 via pyenv on CachyOS. TensorFlow will use the CPU on systems without a supported NVIDIA CUDA GPU.
 
 ```fish
 cd /home/ak/Code/clgproject
 pyenv shell 3.12.8
-```
-
-For reproducibility, a dedicated virtual environment is recommended. If you choose to use one, create it with Python 3.12.8 and activate it before installing dependencies. Do not install project dependencies into system Python.
-
-```fish
-python -m venv .venv
-source .venv/bin/activate.fish
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## 1. Prepare the dataset
+A dedicated virtual environment is preferable for repeatability, but avoid installing project packages into system Python.
 
-After extracting the archive:
+## Prepare dataset splits
 
-```fish
-python src/prepare_data.py
-```
-
-This creates deterministic, stratified CSV manifests under `data/processed/` with approximately 70% training, 15% validation, and 15% test images. Images are not duplicated. The test set is held out from model training and selection.
-
-## 2. Train models
-
-Train MobileNetV2 first:
+TrashNet (already prepared in the baseline workflow):
 
 ```fish
-python src/train.py --model mobilenetv2 --head-epochs 5 --fine-tune-epochs 5
+python src/prepare_data.py --dataset trashnet
 ```
 
-Then train EfficientNetB0 using the same data split:
+RealWaste after extraction:
 
 ```fish
-python src/train.py --model efficientnetb0 --head-epochs 5 --fine-tune-epochs 5
+python src/prepare_data.py --dataset realwaste
 ```
 
-The first run downloads ImageNet pretrained weights, so an internet connection is required. CPU training can take some time. Reduce epochs or use `--fine-tune-epochs 0` for a faster initial smoke test.
+Each dataset receives a reproducible stratified split of approximately 70% training, 15% validation and 15% test. TrashNet manifests remain in `data/processed/` for compatibility with the original baseline. RealWaste manifests go into `data/processed/realwaste/`.
 
-Best checkpoints are saved under `models/`, which is ignored by Git.
+## Train and evaluate
 
-## 3. Evaluate on the held-out test set
+Existing TrashNet checkpoints/results are kept under their original names. New RealWaste checkpoints use a `realwaste_` prefix so the experiments cannot overwrite one another.
 
 ```fish
-python src/evaluate.py --model mobilenetv2
-python src/evaluate.py --model efficientnetb0
+# TrashNet baseline
+python src/train.py --dataset trashnet --model mobilenetv2 --head-epochs 5 --fine-tune-epochs 3
+python src/evaluate.py --dataset trashnet --model mobilenetv2
+
+# RealWaste experiment
+python src/train.py --dataset realwaste --model mobilenetv2 --head-epochs 5 --fine-tune-epochs 3
+python src/evaluate.py --dataset realwaste --model mobilenetv2
 ```
 
-Metrics and confusion matrices are written to `reports/`. Compare accuracy and macro F1 rather than accuracy alone because TrashNet has class imbalance.
+To train EfficientNetB0, replace `mobilenetv2` with `efficientnetb0`. Training includes mild image augmentation and class weighting. It uses CPU-oriented thread limits to keep a laptop usable; full CPU saturation is neither guaranteed nor required.
 
-## 4. Upload an image in the GUI
+Model checkpoints and metadata are saved under `models/`. Evaluation metrics and confusion matrices are saved under `reports/`. These generated artifacts are ignored by Git.
 
-After training at least one model:
+## Image-upload GUI
 
 ```fish
 python src/app.py
 ```
 
-Open the local URL printed by Gradio, choose a trained model, upload a JPG/PNG image, and click **Classify image**.
+Open the local URL Gradio prints. Select a dataset/model combination, upload one image and inspect the predicted class and scores.
 
-## Project structure
+The classifier is a closed-set model: every input is assigned one of its known classes. It may confidently misclassify unrelated or ambiguous photos, so score values should not be interpreted as calibrated certainty. This interface classifies one image as a whole; it does not locate multiple objects.
 
-```text
-src/
-├── prepare_data.py
-├── train.py
-├── evaluate.py
-└── app.py
-data/       # ignored: raw images and generated split manifests
-models/     # ignored: trained checkpoints
-reports/    # ignored: generated evaluation outputs
-```
+## Evaluation protocol
 
-## Evaluation caveats
+- Use validation results for model selection.
+- Use the held-out test set only for the final dataset-specific metrics.
+- Report accuracy, macro F1, per-class precision/recall and a confusion matrix.
+- Maintain an additional external challenge set of independently sourced images that are never used for training or tuning.
+- Track source URLs, labels, license/usage terms and potential duplicates. Never report training images as unseen test examples.
 
-TrashNet is a small dataset with relatively plain backgrounds and an imbalanced class distribution. A strong score on its test split does not guarantee reliable classification of arbitrary real-world waste photographs. Keep the test set untouched until final evaluation, and test additional real-world images separately.
+## Limitations and next experiments
 
-## License and data
+TrashNet is small and uses relatively plain backgrounds. RealWaste is more realistic but still modest in size and drawn from a landfill context. Neither dataset guarantees reliable classification of every Google image or every object in a cluttered scene.
 
-Review the dataset's license and terms on its original source before redistributing images. This project does not bundle the dataset.
+A useful next experiment is to compare both backbones on RealWaste, analyze class-wise errors, and separately evaluate an external challenge set. If the intended task changes to finding several pieces of litter in a scene, use an object-detection dataset such as [TACO](https://github.com/pedropro/TACO) rather than treating the entire scene as one classification sample.
+
+## Data acknowledgement
+
+Cite TrashNet and RealWaste in any report, and review the source datasets' reuse terms before redistributing any images. This repository does not bundle datasets or pretrained checkpoints.
