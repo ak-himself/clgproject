@@ -1,4 +1,4 @@
-"""Gradio GUI for the trained TrashNet classifiers."""
+"""Gradio GUI for separate TrashNet and Custom waste classifiers."""
 from __future__ import annotations
 
 import json
@@ -17,17 +17,19 @@ import pandas as pd
 import tensorflow as tf
 from PIL import Image
 
+from image_registry import build_custom_registry, canonical_image_hash
+
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_DIR = ROOT / "models"
-MODEL_LABELS = {
-    "mobilenetv2": "MobileNetV2",
-    "efficientnetb0": "EfficientNetB0",
-}
+DATASET_LABELS = {"trashnet": "TrashNet", "custom": "Custom"}
+MODEL_LABELS = {"mobilenetv2": "MobileNetV2", "efficientnetb0": "EfficientNetB0"}
 MODEL_KEYS = ("efficientnetb0", "mobilenetv2")
+DATASET_KEYS = ("trashnet", "custom")
 
 
 @dataclass(frozen=True)
 class ModelSpec:
+    dataset_key: str
     model_key: str
     display_name: str
     model: tf.keras.Model | None
@@ -36,21 +38,23 @@ class ModelSpec:
     error: str | None = None
 
 
-def _paths_for(model_key: str) -> tuple[Path, Path]:
+def _paths_for(dataset_key: str, model_key: str) -> tuple[Path, Path]:
+    prefix = "" if dataset_key == "trashnet" else "custom_"
     return (
-        MODEL_DIR / f"{model_key}_best.keras",
-        MODEL_DIR / f"{model_key}_metadata.json",
+        MODEL_DIR / f"{prefix}{model_key}_best.keras",
+        MODEL_DIR / f"{prefix}{model_key}_metadata.json",
     )
 
 
-def _display_name(model_key: str) -> str:
-    return f"TrashNet / {MODEL_LABELS[model_key]}"
+def _display_name(dataset_key: str, model_key: str) -> str:
+    return f"{DATASET_LABELS[dataset_key]} / {MODEL_LABELS[model_key]}"
 
 
-def _failed_spec(model_key: str, error: str) -> ModelSpec:
+def _failed_spec(dataset_key: str, model_key: str, error: str) -> ModelSpec:
     return ModelSpec(
+        dataset_key=dataset_key,
         model_key=model_key,
-        display_name=_display_name(model_key),
+        display_name=_display_name(dataset_key, model_key),
         model=None,
         class_names=(),
         image_size=(224, 224),
@@ -58,25 +62,26 @@ def _failed_spec(model_key: str, error: str) -> ModelSpec:
     )
 
 
-def _load_spec(model_key: str) -> ModelSpec:
-    model_path, metadata_path = _paths_for(model_key)
-    display_name = _display_name(model_key)
+def _load_spec(dataset_key: str, model_key: str) -> ModelSpec:
+    model_path, metadata_path = _paths_for(dataset_key, model_key)
+    display_name = _display_name(dataset_key, model_key)
     if not model_path.is_file():
-        return _failed_spec(model_key, f"Model file is missing: {model_path}")
+        return _failed_spec(dataset_key, model_key, f"Model file is missing: {model_path}")
     if not metadata_path.is_file():
-        return _failed_spec(model_key, f"Metadata file is missing: {metadata_path}")
-
+        return _failed_spec(dataset_key, model_key, f"Metadata file is missing: {metadata_path}")
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("dataset") != dataset_key or metadata.get("model") != model_key:
+            raise ValueError("checkpoint metadata does not match the selected dataset/model")
         class_names = tuple(metadata["class_names"])
         image_size = tuple(metadata["image_size"])
-        if len(class_names) == 0 or len(image_size) != 2:
+        if not class_names or len(image_size) != 2:
             raise ValueError("metadata has an invalid class_names or image_size value")
         model = tf.keras.models.load_model(model_path)
     except (OSError, ValueError, KeyError, TypeError, tf.errors.OpError) as exc:
-        return _failed_spec(model_key, f"Could not load {display_name}: {exc}")
-
+        return _failed_spec(dataset_key, model_key, f"Could not load {display_name}: {exc}")
     return ModelSpec(
+        dataset_key=dataset_key,
         model_key=model_key,
         display_name=display_name,
         model=model,
@@ -85,32 +90,28 @@ def _load_spec(model_key: str) -> ModelSpec:
     )
 
 
-def load_models() -> dict[str, ModelSpec]:
-    """Load every known checkpoint once when the application starts."""
+def load_models() -> dict[tuple[str, str], ModelSpec]:
     return {
-        model_key: _load_spec(model_key) for model_key in MODEL_KEYS
+        (dataset_key, model_key): _load_spec(dataset_key, model_key)
+        for dataset_key in DATASET_KEYS
+        for model_key in MODEL_KEYS
     }
 
 
 _MODELS = load_models()
+_CUSTOM_REGISTRY = build_custom_registry()
 
 
-def model_choices() -> list[str]:
-    return [_MODELS[model_key].display_name for model_key in MODEL_KEYS]
-
-
-def _selected_spec(model_name: str) -> ModelSpec:
-    for model_key in MODEL_KEYS:
-        spec = _MODELS[model_key]
-        if spec.display_name == model_name:
-            return spec
-    raise ValueError("The selected model is not available.")
+def _selected_spec(dataset_key: str, model_key: str) -> ModelSpec:
+    if dataset_key not in DATASET_KEYS or model_key not in MODEL_KEYS:
+        raise ValueError("Select a valid dataset and model.")
+    return _MODELS[(dataset_key, model_key)]
 
 
 def _prepare_image(image: Image.Image, spec: ModelSpec) -> np.ndarray:
     if not isinstance(image, Image.Image):
         raise ValueError("The uploaded file is not a valid image.")
-    resized = image.convert("RGB").resize(spec.image_size)
+    resized = image.convert("RGB").resize((spec.image_size[1], spec.image_size[0]))
     return np.asarray(resized, dtype=np.float32)[None, ...]
 
 
@@ -139,16 +140,16 @@ def predict_image(image: Image.Image, spec: ModelSpec) -> dict[str, Any]:
     }
 
 
-def _format_result(result: dict[str, Any], model_name: str) -> str:
+def _format_result(result: dict[str, Any], display_name: str) -> str:
     top_lines = "\n".join(
         f"{index}. **{label}** — model score **{score:.1%}**"
         for index, (label, score) in enumerate(result["top"], start=1)
     )
     return (
-        f"### {model_name}\n"
-        f"**Prediction:** {result['prediction']}  \n"
-        f"**Inference latency:** {result['latency_ms']:.1f} ms  \n\n"
-        f"**Top 3 predictions**\n{top_lines}"
+        f"#### {display_name} model prediction: **{result['prediction']}**\n\n"
+        f"Model score: **{result['score']:.1%}** · "
+        f"Inference: **{result['latency_ms']:.1f} ms**\n\n"
+        f"Top predictions:\n{top_lines}"
     )
 
 
@@ -164,80 +165,142 @@ def _file_path(file_value: Any) -> str:
     raise ValueError("An uploaded file has no readable path.")
 
 
+def _strict_custom_result(image: Image.Image) -> tuple[str, str]:
+    digest = canonical_image_hash(image)
+    label = _CUSTOM_REGISTRY.get(digest)
+    if label is not None:
+        return label, "Exact pixel match in Custom registry"
+    return "trash", "Not one of the registered Custom images; strict fallback policy"
+
+
+def _predict_for_specs(
+    image: Image.Image, dataset_key: str, specs: list[ModelSpec]
+) -> tuple[list[str], list[dict[str, Any]]]:
+    messages: list[str] = []
+    results: list[dict[str, Any]] = []
+    if dataset_key == "custom":
+        final_label, source = _strict_custom_result(image)
+        messages.append(
+            f"### Strict Custom result: **{final_label}**\n\n"
+            f"Source: {source}. Registry entries: {len(_CUSTOM_REGISTRY)}. "
+            "An unregistered image is assigned to trash by the requested policy."
+        )
+    else:
+        final_label, source = "", ""
+
+    for spec in specs:
+        if spec.model is None:
+            messages.append(f"**{spec.display_name}:** unavailable — {spec.error}")
+            results.append({
+                "Model": spec.display_name,
+                "Model prediction": "Unavailable",
+                "Model score": "",
+                "Top 3": "",
+                "Latency (ms)": None,
+                "error": spec.error,
+            })
+            continue
+        try:
+            result = predict_image(image, spec)
+            messages.append(_format_result(result, spec.display_name))
+            results.append({
+                "Model": spec.display_name,
+                "Model prediction": result["prediction"],
+                "Model score": f"{result['score']:.1%}",
+                "Top 3": " | ".join(f"{label} ({score:.1%})" for label, score in result["top"]),
+                "Latency (ms)": round(result["latency_ms"], 1),
+                "error": None,
+            })
+            if dataset_key == "trashnet":
+                final_label, source = result["prediction"], "ML model prediction"
+        except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
+            messages.append(f"**{spec.display_name}:** {exc}")
+            results.append({
+                "Model": spec.display_name,
+                "Model prediction": "Error",
+                "Model score": "",
+                "Top 3": "",
+                "Latency (ms)": None,
+                "error": str(exc),
+            })
+    if dataset_key == "trashnet":
+        messages.insert(0, f"### TrashNet result: **{final_label or 'Unavailable'}**\n\nSource: {source or 'No model prediction available'}")
+    return messages, results
+
+
 def classify(
     image: Image.Image | None,
     batch_files: list[Any] | None,
-    model_name: str,
+    dataset_key: str,
+    model_key: str,
     compare: bool,
 ):
     status_messages: list[str] = []
-    selected_spec = None
+    specs: list[ModelSpec] = []
     try:
-        selected_spec = _selected_spec(model_name)
+        selected = _selected_spec(dataset_key, model_key)
+        specs.append(selected)
+        if compare:
+            other_key = "mobilenetv2" if model_key == "efficientnetb0" else "efficientnetb0"
+            specs.append(_selected_spec(dataset_key, other_key))
     except ValueError as exc:
         status_messages.append(str(exc))
 
-    specs = [selected_spec] if selected_spec else []
-    if compare and selected_spec:
-        comparison_model = (
-            "mobilenetv2"
-            if selected_spec and selected_spec.model_key == "efficientnetb0"
-            else "efficientnetb0"
-        )
-        comparison_spec = _MODELS[comparison_model]
-        if comparison_spec.model is None:
-            status_messages.append(comparison_spec.error or "Comparison model is unavailable.")
-        elif comparison_spec not in specs:
-            specs.append(comparison_spec)
-
-    result_markdown: list[str] = []
     preview = image
+    result_markdown: list[str] = []
     rows: list[dict[str, Any]] = []
-    if image is not None:
-        for spec in specs:
-            try:
-                result = predict_image(image, spec)
-                result_markdown.append(_format_result(result, spec.display_name))
-            except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
-                status_messages.append(f"{spec.display_name}: {exc}")
+
+    def add_rows(filename: str, current_image: Image.Image) -> None:
+        messages, image_results = _predict_for_specs(current_image, dataset_key, specs)
+        result_markdown.extend(messages)
+        if dataset_key == "custom":
+            final_label, source = _strict_custom_result(current_image)
+        else:
+            available = next((item for item in image_results if item.get("error") is None), None)
+            final_label = available["Model prediction"] if available else "Unavailable"
+            source = "ML model prediction"
+        for item in image_results:
+            rows.append({
+                "Image": filename,
+                "Dataset": DATASET_LABELS[dataset_key],
+                "Final result": final_label,
+                "Result source": source,
+                **{key: value for key, value in item.items() if key != "error"},
+            })
+
+    if image is not None and specs:
+        add_rows("Single image", image)
 
     for file_value in batch_files or []:
         try:
             path = _file_path(file_value)
             with Image.open(path) as opened:
-                batch_image = opened.convert("RGB")
-                if preview is None:
-                    preview = batch_image.copy()
-                for spec in specs:
-                    result = predict_image(batch_image, spec)
-                    rows.append(
-                        {
-                            "Image": Path(path).name,
-                            "Model": spec.display_name,
-                            "Prediction": result["prediction"],
-                            "Model score": f"{result['score']:.1%}",
-                            "Top 3": " | ".join(
-                                f"{label} ({score:.1%})"
-                                for label, score in result["top"]
-                            ),
-                            "Latency (ms)": round(result["latency_ms"], 1),
-                        }
-                    )
+                batch_image = opened.copy()
+            if preview is None:
+                preview = batch_image.copy()
+            if specs:
+                add_rows(Path(path).name, batch_image)
         except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
             status_messages.append(f"{getattr(file_value, 'name', 'Uploaded file')}: {exc}")
 
-    if not image and not batch_files:
+    if image is None and not batch_files:
         status_messages.append("Upload an image or one or more files to begin.")
-    status_messages.append(
-        "Model scores are not guarantees of correctness. The classifier always selects a known class."
-    )
+    if dataset_key == "custom":
+        status_messages.append(
+            "Strict Custom matching guarantees the saved folder label only for exact decoded-pixel matches. "
+            "Changed, resized, or cropped images are not exact matches and follow the fallback-to-trash policy. "
+            "Model predictions are shown separately and are not guarantees."
+        )
+    else:
+        status_messages.append("Model scores are not guarantees of correctness; TrashNet is a closed-set classifier.")
+    table_columns = [
+        "Image", "Dataset", "Final result", "Result source", "Model",
+        "Model prediction", "Model score", "Top 3", "Latency (ms)",
+    ]
     return (
         preview,
-        "\n\n".join(result_markdown) or "No single-image result yet.",
-        pd.DataFrame(
-            rows,
-            columns=["Image", "Model", "Prediction", "Model score", "Top 3", "Latency (ms)"],
-        ),
+        "\n\n---\n\n".join(result_markdown) or "No prediction result yet.",
+        pd.DataFrame(rows, columns=table_columns),
         "\n".join(status_messages),
     )
 
@@ -245,13 +308,18 @@ def classify(
 with gr.Blocks(title="Waste Classification Lab") as demo:
     gr.Markdown(
         "# Waste Classification Lab\n"
-        "Upload one image for a detailed prediction or upload multiple files for a batch table. "
-        "Use Compare both models to run both TrashNet backbones on the same images."
+        "Choose a dataset and backbone independently. Custom mode checks exact registered images first; "
+        "unregistered images are assigned to trash by the strict Custom policy."
     )
     with gr.Row():
+        dataset_dropdown = gr.Dropdown(
+            choices=[("TrashNet", "trashnet"), ("Custom", "custom")],
+            value="trashnet",
+            label="Dataset",
+        )
         model_dropdown = gr.Dropdown(
-            choices=model_choices(),
-            value=_MODELS["efficientnetb0"].display_name,
+            choices=[(MODEL_LABELS[key], key) for key in MODEL_KEYS],
+            value="efficientnetb0",
             label="Model",
         )
         compare_checkbox = gr.Checkbox(label="Compare both models", value=False)
@@ -262,23 +330,24 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
         file_count="multiple", file_types=["image"], type="filepath", label="Batch images"
     )
     classify_button = gr.Button("Classify image(s)", variant="primary")
-    single_output = gr.Markdown("No single-image result yet.")
+    single_output = gr.Markdown("No prediction result yet.")
     batch_output = gr.Dataframe(
-        headers=["Image", "Model", "Prediction", "Model score", "Top 3", "Latency (ms)"],
-        datatype=["str", "str", "str", "str", "str", "number"],
+        headers=[
+            "Image", "Dataset", "Final result", "Result source", "Model",
+            "Model prediction", "Model score", "Top 3", "Latency (ms)",
+        ],
         label="Batch results",
         interactive=False,
     )
     status_output = gr.Textbox(label="Status", interactive=False)
-
     classify_button.click(
         fn=classify,
-        inputs=[image_input, batch_input, model_dropdown, compare_checkbox],
+        inputs=[image_input, batch_input, dataset_dropdown, model_dropdown, compare_checkbox],
         outputs=[preview_output, single_output, batch_output, status_output],
     )
     gr.Markdown(
-        "Confidence is shown as a model score, not a guarantee of correctness. "
-        "This closed-set classifier labels the whole image and does not detect separate objects."
+        "Custom strict matching uses canonical decoded RGB pixels, not filenames. "
+        "The registered set is not a general-purpose waste classifier; every non-matching image falls back to trash."
     )
 
 

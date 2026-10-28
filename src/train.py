@@ -1,4 +1,4 @@
-"""Train a transfer-learning waste classifier on TrashNet."""
+"""Train a transfer-learning waste classifier on TrashNet or Custom."""
 from __future__ import annotations
 
 import argparse
@@ -18,18 +18,25 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 ROOT = Path(__file__).resolve().parents[1]
-PROCESSED_DIR = ROOT / "data" / "processed"
+PROCESSED_ROOT = ROOT / "data" / "processed"
 MODEL_DIR = ROOT / "models"
 IMAGE_SIZE = (224, 224)
 BATCH_SIZE = 16
 SEED = 42
 
 
+def processed_dir(dataset: str) -> Path:
+    return PROCESSED_ROOT if dataset == "trashnet" else PROCESSED_ROOT / "custom"
+
+
+def artifact_prefix(dataset: str) -> str:
+    return "" if dataset == "trashnet" else "custom_"
+
+
 def set_seeds() -> None:
     random.seed(SEED)
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
-    # Keep the laptop responsive and avoid thermal saturation.
     try:
         tf.config.threading.set_intra_op_parallelism_threads(4)
         tf.config.threading.set_inter_op_parallelism_threads(2)
@@ -37,10 +44,10 @@ def set_seeds() -> None:
         pass
 
 
-def load_manifest(data_dir: Path, name: str, class_to_index: dict[str, int]) -> pd.DataFrame:
+def load_manifest(data_dir: Path, name: str, class_to_index: dict[str, int], dataset: str) -> pd.DataFrame:
     path = data_dir / f"{name}.csv"
     if not path.exists():
-        raise SystemExit(f"Missing {path}. Run: python src/prepare_data.py")
+        raise SystemExit(f"Missing {path}. Run: python src/prepare_data.py --dataset {dataset}")
     frame = pd.read_csv(path)
     frame["label_id"] = frame["label"].map(class_to_index)
     if frame["label_id"].isna().any():
@@ -70,12 +77,8 @@ def make_dataset(frame: pd.DataFrame, training: bool, batch_size: int) -> tf.dat
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 
-def build_model(
-    model_name: str, num_classes: int
-) -> tuple[keras.Model, keras.Model]:
+def build_model(model_name: str, num_classes: int) -> tuple[keras.Model, keras.Model]:
     inputs = keras.Input(shape=(*IMAGE_SIZE, 3), name="image")
-    # Augmentation is active only during training; validation, evaluation and
-    # GUI inference use the unmodified image. Mild transforms preserve labels.
     augmenter = keras.Sequential(
         [
             layers.RandomFlip("horizontal"),
@@ -96,7 +99,6 @@ def build_model(
         backbone = keras.applications.EfficientNetB0(
             include_top=False, weights="imagenet", input_shape=(*IMAGE_SIZE, 3)
         )
-        # EfficientNetB0 includes its own rescaling/preprocessing layers.
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
@@ -110,6 +112,7 @@ def build_model(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", choices=["trashnet", "custom"], default="trashnet")
     parser.add_argument("--model", choices=["mobilenetv2", "efficientnetb0"], required=True)
     parser.add_argument("--head-epochs", type=int, default=5)
     parser.add_argument("--fine-tune-epochs", type=int, default=5)
@@ -119,18 +122,14 @@ def main() -> None:
         parser.error("epochs and batch size must be positive (fine-tune epochs may be zero)")
 
     set_seeds()
-    data_dir = PROCESSED_DIR
-    prefix = ""
+    data_dir = processed_dir(args.dataset)
     class_file = data_dir / "class_names.json"
     if not class_file.exists():
-        raise SystemExit(
-            f"Class names not found at {class_file}. "
-            "Run: python src/prepare_data.py"
-        )
+        raise SystemExit(f"Class names not found at {class_file}. Run: python src/prepare_data.py --dataset {args.dataset}")
     class_names = json.loads(class_file.read_text(encoding="utf-8"))
     class_to_index = {name: index for index, name in enumerate(class_names)}
-    train_frame = load_manifest(data_dir, "train", class_to_index)
-    val_frame = load_manifest(data_dir, "val", class_to_index)
+    train_frame = load_manifest(data_dir, "train", class_to_index, args.dataset)
+    val_frame = load_manifest(data_dir, "val", class_to_index, args.dataset)
     train_ds = make_dataset(train_frame, training=True, batch_size=args.batch_size)
     val_ds = make_dataset(val_frame, training=False, batch_size=args.batch_size)
 
@@ -141,14 +140,11 @@ def main() -> None:
         metrics=["accuracy"],
     )
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = artifact_prefix(args.dataset)
     checkpoint = MODEL_DIR / f"{prefix}{args.model}_best.keras"
     callbacks = [
-        keras.callbacks.ModelCheckpoint(
-            checkpoint, monitor="val_loss", save_best_only=True, verbose=1
-        ),
-        keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=2, restore_best_weights=True
-        ),
+        keras.callbacks.ModelCheckpoint(checkpoint, monitor="val_loss", save_best_only=True, verbose=1),
+        keras.callbacks.EarlyStopping(monitor="val_loss", patience=2, restore_best_weights=True),
     ]
     class_ids = np.arange(len(class_names))
     weights = compute_class_weight(
@@ -156,12 +152,14 @@ def main() -> None:
         classes=class_ids,
         y=train_frame["label_id"].to_numpy(dtype=int),
     )
-    class_weights = {int(class_id): float(weight) for class_id, weight in zip(class_ids, weights)}
+    class_weights = {
+        int(class_id): float(weight) for class_id, weight in zip(class_ids, weights)
+    }
 
-    print(f"Dataset: trashnet | model: {args.model} | CPU training")
+    print(f"Dataset: {args.dataset} | model: {args.model} | CPU training")
     print(f"Classes: {class_names}")
     print(f"Train/validation images: {len(train_frame)}/{len(val_frame)}")
-    print(f"Using mild augmentation and class weights: {class_weights}")
+    print(f"Class weights: {class_weights}")
     model.fit(
         train_ds, validation_data=val_ds, epochs=args.head_epochs,
         callbacks=callbacks, class_weight=class_weights, verbose=1,
@@ -175,7 +173,6 @@ def main() -> None:
         for layer in backbone.layers:
             if isinstance(layer, layers.BatchNormalization):
                 layer.trainable = False
-
         model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=1e-5),
             loss="sparse_categorical_crossentropy",
@@ -186,10 +183,9 @@ def main() -> None:
             callbacks=callbacks, class_weight=class_weights, verbose=1,
         )
 
-    # Reload the best validation-loss checkpoint rather than saving the final epoch.
     keras.models.load_model(checkpoint)
     metadata = {
-        "dataset": "trashnet",
+        "dataset": args.dataset,
         "model": args.model,
         "class_names": class_names,
         "image_size": list(IMAGE_SIZE),
@@ -197,11 +193,10 @@ def main() -> None:
         "seed": SEED,
         "augmentation": ["horizontal_flip", "rotation", "zoom", "contrast"],
     }
-    (MODEL_DIR / f"{prefix}{args.model}_metadata.json").write_text(
-        json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
-    )
+    metadata_path = MODEL_DIR / f"{prefix}{args.model}_metadata.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(f"\nSaved best model: {checkpoint}")
-    print(f"Metadata: {MODEL_DIR / f'{prefix}{args.model}_metadata.json'}")
+    print(f"Metadata: {metadata_path}")
 
 
 if __name__ == "__main__":

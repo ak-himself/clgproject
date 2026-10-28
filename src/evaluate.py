@@ -1,4 +1,4 @@
-"""Evaluate a saved waste classifier on its held-out test split."""
+"""Evaluate a saved model on its held-out dataset test split."""
 from __future__ import annotations
 
 import argparse
@@ -16,25 +16,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from sklearn.metrics import (
-    accuracy_score, classification_report, confusion_matrix, f1_score,
-)
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+
+from image_registry import build_custom_registry, image_file_hash
 
 ROOT = Path(__file__).resolve().parents[1]
-PROCESSED_DIR = ROOT / "data" / "processed"
+PROCESSED_ROOT = ROOT / "data" / "processed"
 MODEL_DIR = ROOT / "models"
 REPORT_DIR = ROOT / "reports"
 IMAGE_SIZE = (224, 224)
 BATCH_SIZE = 16
 
 
+def processed_dir(dataset: str) -> Path:
+    return PROCESSED_ROOT if dataset == "trashnet" else PROCESSED_ROOT / "custom"
+
+
+def artifact_prefix(dataset: str) -> str:
+    return "" if dataset == "trashnet" else "custom_"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", choices=["trashnet", "custom"], default="trashnet")
     parser.add_argument("--model", choices=["mobilenetv2", "efficientnetb0"], required=True)
     args = parser.parse_args()
 
-    data_dir = PROCESSED_DIR
-    model_path = MODEL_DIR / f"{args.model}_best.keras"
+    data_dir = processed_dir(args.dataset)
+    prefix = artifact_prefix(args.dataset)
+    model_path = MODEL_DIR / f"{prefix}{args.model}_best.keras"
     class_path = data_dir / "class_names.json"
     test_path = data_dir / "test.csv"
     for path in (model_path, class_path, test_path):
@@ -43,19 +53,22 @@ def main() -> None:
 
     class_names = json.loads(class_path.read_text(encoding="utf-8"))
     frame = pd.read_csv(test_path)
+    if frame.empty:
+        raise SystemExit(f"No test images found in {test_path}")
     class_to_index = {name: i for i, name in enumerate(class_names)}
-    y_true = frame["label"].map(class_to_index).to_numpy(dtype=int)
+    y_true = frame["label"].map(class_to_index)
+    if y_true.isna().any():
+        raise SystemExit(f"Test manifest contains labels absent from {class_path}")
+    y_true = y_true.to_numpy(dtype=int)
     model = tf.keras.models.load_model(model_path)
 
-    # Predict in small batches to keep memory use modest on a CPU-only laptop.
     predictions: list[np.ndarray] = []
     inference_seconds = 0.0
     for start in range(0, len(frame), BATCH_SIZE):
         batch = frame.iloc[start : start + BATCH_SIZE]
         images = []
         for relative_path in batch["path"]:
-            full_path = ROOT / relative_path
-            image = tf.keras.utils.load_img(full_path, target_size=IMAGE_SIZE)
+            image = tf.keras.utils.load_img(ROOT / relative_path, target_size=IMAGE_SIZE)
             images.append(tf.keras.utils.img_to_array(image))
         x_batch = np.asarray(images, dtype=np.float32)
         tic = time.perf_counter()
@@ -73,7 +86,7 @@ def main() -> None:
     )
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
-        "dataset": "trashnet",
+        "dataset": args.dataset,
         "model": args.model,
         "test_samples": len(frame),
         "accuracy": accuracy,
@@ -81,7 +94,30 @@ def main() -> None:
         "mean_inference_ms_per_image": inference_seconds * 1000 / max(len(frame), 1),
         "classification_report": report,
     }
-    report_path = REPORT_DIR / f"{args.model}_metrics.json"
+
+    if args.dataset == "custom":
+        # Integrity check only: this is not an ML generalization metric.
+        registry = build_custom_registry()
+        source_manifest = pd.concat(
+            [pd.read_csv(data_dir / f"{split}.csv") for split in ("train", "val", "test")],
+            ignore_index=True,
+        )
+        resolved = 0
+        for row in source_manifest.itertuples(index=False):
+            try:
+                matched_label = registry.get(image_file_hash(ROOT / row.path))
+            except (OSError, ValueError):
+                matched_label = None
+            if matched_label == row.label:
+                resolved += 1
+        output["exact_registry_self_check"] = {
+            "registered_files": len(source_manifest),
+            "files_resolved_to_expected_folder_label": resolved,
+            "coverage": resolved / max(len(source_manifest), 1),
+            "note": "Registry self-check only; not model test accuracy or evidence of generalization.",
+        }
+
+    report_path = REPORT_DIR / f"{prefix}{args.model}_metrics.json"
     report_path.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
 
     matrix = confusion_matrix(y_true, y_pred, labels=list(range(len(class_names))))
@@ -92,25 +128,33 @@ def main() -> None:
         xticks=np.arange(len(class_names)), yticks=np.arange(len(class_names)),
         xticklabels=class_names, yticklabels=class_names,
         xlabel="Predicted label", ylabel="True label",
-        title=f"trashnet / {args.model} — held-out test confusion matrix",
+        title=f"{args.dataset} / {args.model} — held-out test confusion matrix",
     )
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     threshold = matrix.max() / 2 if matrix.size else 0
     for row in range(matrix.shape[0]):
-        for col in range(matrix.shape[1]):
+        for col in range(matrix.shape[0]):
             ax.text(col, row, str(matrix[row, col]), ha="center", va="center",
                     color="white" if matrix[row, col] > threshold else "black")
     fig.tight_layout()
-    matrix_path = REPORT_DIR / f"{args.model}_confusion_matrix.png"
+    matrix_path = REPORT_DIR / f"{prefix}{args.model}_confusion_matrix.png"
     fig.savefig(matrix_path, dpi=150)
     plt.close(fig)
 
-    print("Dataset: trashnet")
+    print(f"Dataset: {args.dataset}")
     print(f"Model: {args.model}")
     print(f"Test samples: {len(frame)}")
-    print(f"Accuracy: {accuracy:.4f}")
+    print(f"Model test accuracy: {accuracy:.4f}")
     print(f"Macro F1: {macro_f1:.4f}")
     print(f"Mean model inference: {output['mean_inference_ms_per_image']:.2f} ms/image")
+    if args.dataset == "custom":
+        check = output["exact_registry_self_check"]
+        print(
+            "Exact registry self-check: "
+            f"{check['files_resolved_to_expected_folder_label']}/"
+            f"{check['registered_files']} files "
+            f"({check['coverage']:.1%}); this is not model accuracy."
+        )
     print(f"Saved report: {report_path}")
     print(f"Saved confusion matrix: {matrix_path}")
 
