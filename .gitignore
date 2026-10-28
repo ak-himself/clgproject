@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments and local config
+.venv/
+venv/
+env/
+ENV/
+.python-version
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Datasets and archives (never commit raw/processed images)
+data/
+datasets/
+dataset/
+garbage_dataset/
+trashnet/
+trashnet-*/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Trained models and checkpoints
+models/
+saved_models/
+checkpoints/
+*.keras
+*.h5
+*.hdf5
+*.weights.h5
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pb
+*.ckpt
+
+# Generated reports, predictions, logs
+reports/
+runs/
+outputs/
+logs/
+*.log
+*.csv
+*.parquet
+
+# TensorFlow / Keras caches
+.keras/
+.tensorflow/
