@@ -1,101 +1,320 @@
-"""Gradio GUI: upload a waste image and test a model trained on TrashNet or RealWaste."""
+"""Gradio GUI for the trained TrashNet and RealWaste classifiers."""
 from __future__ import annotations
 
 import json
 import os
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import gradio as gr
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_DIR = ROOT / "models"
-PROCESSED_DIR = ROOT / "data" / "processed"
-IMAGE_SIZE = (224, 224)
 MODEL_LABELS = {
     "mobilenetv2": "MobileNetV2",
     "efficientnetb0": "EfficientNetB0",
 }
-DATASET_LABELS = {"trashnet": "TrashNet (6 classes)", "realwaste": "RealWaste (9 classes)"}
-_loaded_models: dict[str, tuple[tf.keras.Model, list[str]]] = {}
+DATASET_LABELS = {
+    "trashnet": "TrashNet (6 classes)",
+    "realwaste": "RealWaste (9 classes)",
+}
+DATASETS = ("realwaste", "trashnet")
+MODEL_KEYS = ("efficientnetb0", "mobilenetv2")
 
 
-def options() -> dict[str, tuple[str, str]]:
-    found: dict[str, tuple[str, str]] = {}
-    for dataset in ("trashnet", "realwaste"):
-        prefix = "" if dataset == "trashnet" else f"{dataset}_"
-        for model_key, model_label in MODEL_LABELS.items():
-            checkpoint = MODEL_DIR / f"{prefix}{model_key}_best.keras"
-            if checkpoint.exists():
-                found[f"{DATASET_LABELS[dataset]} / {model_label}"] = (dataset, model_key)
-    return found
+@dataclass(frozen=True)
+class ModelSpec:
+    dataset: str
+    model_key: str
+    display_name: str
+    model: tf.keras.Model | None
+    class_names: tuple[str, ...]
+    image_size: tuple[int, int]
+    error: str | None = None
 
 
-def load_model(display_name: str) -> tuple[tf.keras.Model, list[str]]:
-    dataset, model_key = options()[display_name]
-    cache_key = f"{dataset}_{model_key}"
+def _cache_key(dataset: str, model_key: str) -> str:
+    return f"{dataset}_{model_key}"
+
+
+def _paths_for(dataset: str, model_key: str) -> tuple[Path, Path]:
     prefix = "" if dataset == "trashnet" else f"{dataset}_"
-    if cache_key not in _loaded_models:
-        model_path = MODEL_DIR / f"{prefix}{model_key}_best.keras"
-        data_dir = PROCESSED_DIR if dataset == "trashnet" else PROCESSED_DIR / dataset
-        class_path = data_dir / "class_names.json"
-        if not class_path.exists():
-            raise FileNotFoundError(f"Class names not found: {class_path}")
-        class_names = json.loads(class_path.read_text(encoding="utf-8"))
-        _loaded_models[cache_key] = (tf.keras.models.load_model(model_path), class_names)
-    return _loaded_models[cache_key]
-
-
-def predict(image: Image.Image | None, model_choice: str):
-    if image is None:
-        return {}, "Upload an image to begin."
-    available = options()
-    if not model_choice or model_choice not in available:
-        return {}, "No matching trained model is available. Train a model first."
-    model, class_names = load_model(model_choice)
-    image = image.convert("RGB").resize(IMAGE_SIZE)
-    array = np.asarray(image, dtype=np.float32)[None, ...]
-    probabilities = model.predict(array, verbose=0)[0]
-    ranking = np.argsort(probabilities)[::-1]
-    scores = {class_names[i]: float(probabilities[i]) for i in ranking}
-    best = int(ranking[0])
-    note = (
-        f"Prediction: {class_names[best]} (model score {probabilities[best]:.1%}). "
-        "The model always selects among its trained classes; an unfamiliar image can still receive a high score."
+    return (
+        MODEL_DIR / f"{prefix}{model_key}_best.keras",
+        MODEL_DIR / f"{prefix}{model_key}_metadata.json",
     )
-    return scores, note
+
+
+def _display_name(dataset: str, model_key: str) -> str:
+    return f"{DATASET_LABELS[dataset]} / {MODEL_LABELS[model_key]}"
+
+
+def _failed_spec(dataset: str, model_key: str, error: str) -> ModelSpec:
+    return ModelSpec(
+        dataset=dataset,
+        model_key=model_key,
+        display_name=_display_name(dataset, model_key),
+        model=None,
+        class_names=(),
+        image_size=(224, 224),
+        error=error,
+    )
+
+
+def _load_spec(dataset: str, model_key: str) -> ModelSpec:
+    model_path, metadata_path = _paths_for(dataset, model_key)
+    display_name = _display_name(dataset, model_key)
+    if not model_path.is_file():
+        return _failed_spec(dataset, model_key, f"Model file is missing: {model_path}")
+    if not metadata_path.is_file():
+        return _failed_spec(dataset, model_key, f"Metadata file is missing: {metadata_path}")
+
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        class_names = tuple(metadata["class_names"])
+        image_size = tuple(metadata["image_size"])
+        if len(class_names) == 0 or len(image_size) != 2:
+            raise ValueError("metadata has an invalid class_names or image_size value")
+        model = tf.keras.models.load_model(model_path)
+    except (OSError, ValueError, KeyError, TypeError, tf.errors.OpError) as exc:
+        return _failed_spec(dataset, model_key, f"Could not load {display_name}: {exc}")
+
+    return ModelSpec(
+        dataset=dataset,
+        model_key=model_key,
+        display_name=display_name,
+        model=model,
+        class_names=class_names,
+        image_size=(int(image_size[0]), int(image_size[1])),
+    )
+
+
+def load_models() -> dict[str, ModelSpec]:
+    """Load every known checkpoint once when the application starts."""
+    return {
+        _cache_key(dataset, model_key): _load_spec(dataset, model_key)
+        for dataset in DATASETS
+        for model_key in MODEL_KEYS
+    }
+
+
+_MODELS = load_models()
+
+
+def model_choices(dataset: str) -> list[str]:
+    return [
+        _MODELS[_cache_key(dataset, model_key)].display_name for model_key in MODEL_KEYS
+    ]
+
+
+def _selected_spec(dataset: str, model_name: str) -> ModelSpec:
+    if dataset not in DATASETS:
+        raise ValueError("The selected dataset is not available.")
+    for model_key in MODEL_KEYS:
+        spec = _MODELS[_cache_key(dataset, model_key)]
+        if spec.display_name == model_name:
+            return spec
+    raise ValueError("The selected model is not available.")
+
+
+def _prepare_image(image: Image.Image, spec: ModelSpec) -> np.ndarray:
+    if not isinstance(image, Image.Image):
+        raise ValueError("The uploaded file is not a valid image.")
+    resized = image.convert("RGB").resize(spec.image_size)
+    return np.asarray(resized, dtype=np.float32)[None, ...]
+
+
+def predict_image(image: Image.Image, spec: ModelSpec) -> dict[str, Any]:
+    if spec.model is None:
+        raise RuntimeError(spec.error or "The selected model could not be loaded.")
+    array = _prepare_image(image, spec)
+    started = time.perf_counter()
+    probabilities = np.asarray(spec.model.predict(array, verbose=0))[0]
+    latency_ms = (time.perf_counter() - started) * 1000
+    if probabilities.ndim != 1 or len(probabilities) != len(spec.class_names):
+        raise RuntimeError(
+            f"{spec.display_name} returned {len(probabilities)} scores for "
+            f"{len(spec.class_names)} classes."
+        )
+    ranking = np.argsort(probabilities)[::-1]
+    top = [
+        (spec.class_names[int(index)], float(probabilities[int(index)]))
+        for index in ranking[:3]
+    ]
+    return {
+        "prediction": top[0][0],
+        "score": top[0][1],
+        "top": top,
+        "latency_ms": latency_ms,
+    }
+
+
+def _format_result(result: dict[str, Any], model_name: str) -> str:
+    top_lines = "\n".join(
+        f"{index}. **{label}** — model score **{score:.1%}**"
+        for index, (label, score) in enumerate(result["top"], start=1)
+    )
+    return (
+        f"### {model_name}\n"
+        f"**Prediction:** {result['prediction']}  \n"
+        f"**Inference latency:** {result['latency_ms']:.1f} ms  \n\n"
+        f"**Top 3 predictions**\n{top_lines}"
+    )
+
+
+def _file_path(file_value: Any) -> str:
+    if isinstance(file_value, str):
+        return file_value
+    path = getattr(file_value, "path", None)
+    if path:
+        return str(path)
+    name = getattr(file_value, "name", None)
+    if name:
+        return str(name)
+    raise ValueError("An uploaded file has no readable path.")
+
+
+def classify(
+    image: Image.Image | None,
+    batch_files: list[Any] | None,
+    dataset: str,
+    model_name: str,
+    compare: bool,
+):
+    status_messages: list[str] = []
+    selected_spec = None
+    try:
+        selected_spec = _selected_spec(dataset, model_name)
+    except ValueError as exc:
+        status_messages.append(str(exc))
+
+    specs = [selected_spec] if selected_spec else []
+    if compare and selected_spec:
+        comparison_model = (
+            "mobilenetv2"
+            if selected_spec and selected_spec.model_key == "efficientnetb0"
+            else "efficientnetb0"
+        )
+        comparison_key = _cache_key(dataset, comparison_model)
+        comparison_spec = _MODELS[comparison_key]
+        if comparison_spec.model is None:
+            status_messages.append(comparison_spec.error or "Comparison model is unavailable.")
+        elif comparison_spec not in specs:
+            specs.append(comparison_spec)
+
+    result_markdown: list[str] = []
+    preview = image
+    rows: list[dict[str, Any]] = []
+    if image is not None:
+        for spec in specs:
+            try:
+                result = predict_image(image, spec)
+                result_markdown.append(_format_result(result, spec.display_name))
+            except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
+                status_messages.append(f"{spec.display_name}: {exc}")
+
+    for file_value in batch_files or []:
+        try:
+            path = _file_path(file_value)
+            with Image.open(path) as opened:
+                batch_image = opened.convert("RGB")
+                if preview is None:
+                    preview = batch_image.copy()
+                for spec in specs:
+                    result = predict_image(batch_image, spec)
+                    rows.append(
+                        {
+                            "Image": Path(path).name,
+                            "Model": spec.display_name,
+                            "Prediction": result["prediction"],
+                            "Model score": f"{result['score']:.1%}",
+                            "Top 3": " | ".join(
+                                f"{label} ({score:.1%})"
+                                for label, score in result["top"]
+                            ),
+                            "Latency (ms)": round(result["latency_ms"], 1),
+                        }
+                    )
+        except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
+            status_messages.append(f"{getattr(file_value, 'name', 'Uploaded file')}: {exc}")
+
+    if not image and not batch_files:
+        status_messages.append("Upload an image or one or more files to begin.")
+    status_messages.append(
+        "Model scores are not guarantees of correctness. The classifier always selects a known class."
+    )
+    return (
+        preview,
+        "\n\n".join(result_markdown) or "No single-image result yet.",
+        pd.DataFrame(
+            rows,
+            columns=["Image", "Model", "Prediction", "Model score", "Top 3", "Latency (ms)"],
+        ),
+        "\n".join(status_messages),
+    )
+
+
+def update_model_choices(dataset: str):
+    choices = model_choices(dataset)
+    return gr.update(choices=choices, value=choices[0] if choices else None)
 
 
 with gr.Blocks(title="Waste Classification Lab") as demo:
     gr.Markdown(
         "# Waste Classification Lab\n"
-        "Compare models trained on the controlled TrashNet dataset and the more realistic RealWaste dataset. "
-        "Scores are model probabilities, not guarantees of correctness."
-    )
-    model_options = options()
-    model_dropdown = gr.Dropdown(
-        choices=list(model_options),
-        value=(next(iter(model_options)) if model_options else None),
-        label="Dataset and model",
-        interactive=True,
+        "Upload one image for a detailed prediction or upload multiple files for a batch table. "
+        "Use Compare both models to run both backbones on the same images."
     )
     with gr.Row():
-        image_input = gr.Image(type="pil", label="Upload waste image")
-        prediction_output = gr.Label(label="Class scores", num_top_classes=9)
-    status_output = gr.Textbox(label="Result", interactive=False)
-    predict_button = gr.Button("Classify image", variant="primary")
-    predict_button.click(
-        fn=predict, inputs=[image_input, model_dropdown],
-        outputs=[prediction_output, status_output],
+        dataset_dropdown = gr.Dropdown(
+            choices=[(DATASET_LABELS[key], key) for key in DATASETS],
+            value="realwaste",
+            label="Dataset",
+        )
+        model_dropdown = gr.Dropdown(
+            choices=model_choices("realwaste"),
+            value=_MODELS[
+                _cache_key("realwaste", "efficientnetb0")
+            ].display_name,
+            label="Model",
+        )
+        compare_checkbox = gr.Checkbox(label="Compare both models", value=False)
+    with gr.Row():
+        image_input = gr.Image(type="pil", label="Single image")
+        preview_output = gr.Image(type="pil", label="Uploaded image", interactive=False)
+    batch_input = gr.File(
+        file_count="multiple", file_types=["image"], type="filepath", label="Batch images"
+    )
+    classify_button = gr.Button("Classify image(s)", variant="primary")
+    single_output = gr.Markdown("No single-image result yet.")
+    batch_output = gr.Dataframe(
+        headers=["Image", "Model", "Prediction", "Model score", "Top 3", "Latency (ms)"],
+        datatype=["str", "str", "str", "str", "str", "number"],
+        label="Batch results",
+        interactive=False,
+    )
+    status_output = gr.Textbox(label="Status", interactive=False)
+
+    dataset_dropdown.change(
+        fn=update_model_choices, inputs=dataset_dropdown, outputs=model_dropdown
+    )
+    classify_button.click(
+        fn=classify,
+        inputs=[image_input, batch_input, dataset_dropdown, model_dropdown, compare_checkbox],
+        outputs=[preview_output, single_output, batch_output, status_output],
     )
     gr.Markdown(
-        "For a fair external test, use images that were not included in training or validation. "
-        "A single-image classifier is not designed to detect and separately label multiple objects in one photograph."
+        "Confidence is shown as a model score, not a guarantee of correctness. "
+        "This closed-set classifier labels the whole image and does not detect separate objects."
     )
 
 

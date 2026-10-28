@@ -80,13 +80,28 @@ To train EfficientNetB0, replace `mobilenetv2` with `efficientnetb0`. Training i
 
 Model checkpoints and metadata are saved under `models/`. Evaluation metrics and confusion matrices are saved under `reports/`. These generated artifacts are ignored by Git.
 
-## Image-upload GUI
+## Image-classification GUI
+
+Install the dependencies, then launch the local Gradio application from the repository root:
 
 ```fish
+cd /home/ak/Code/clgproject
+pyenv shell 3.12.8
+python -m pip install -r requirements.txt
 python src/app.py
 ```
 
-Open the local URL Gradio prints. Select a dataset/model combination, upload one image and inspect the predicted class and scores.
+Open the local URL Gradio prints. The GUI defaults to the RealWaste EfficientNetB0
+checkpoint and supports:
+
+- one uploaded image with its predicted class, top-three model scores and inference latency;
+- multiple uploaded images with a results table;
+- comparing MobileNetV2 and EfficientNetB0 on the same image or batch; and
+- switching to the existing TrashNet checkpoints without changing the training or evaluation workflows.
+
+Models are loaded once when the application starts. If a checkpoint or its metadata
+is missing or cannot be loaded, the GUI reports the problem and keeps other available
+models usable.
 
 The classifier is a closed-set model: every input is assigned one of its known classes. It may confidently misclassify unrelated or ambiguous photos, so score values should not be interpreted as calibrated certainty. This interface classifies one image as a whole; it does not locate multiple objects.
 
