@@ -10,7 +10,6 @@ __pycache__/
 .coverage
 htmlcov/
 
-/data/custom_images/
 
 # Environments and local configuration
 .venv/
