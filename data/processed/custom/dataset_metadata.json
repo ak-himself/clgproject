@@ -1,0 +1,26 @@
+{
+  "dataset": "custom",
+  "source_directory": "data/custom_images/train",
+  "seed": 42,
+  "split": {
+    "train": 1.0,
+    "validation": 0.0,
+    "test": 0.0,
+    "method": "all_images_for_training_no_holdout"
+  },
+  "total_images": 50,
+  "class_counts": {
+    "cardboard": 10,
+    "glass": 10,
+    "metal": 10,
+    "paper": 10,
+    "plastic": 10
+  },
+  "classes": [
+    "cardboard",
+    "glass",
+    "metal",
+    "paper",
+    "plastic"
+  ]
+}

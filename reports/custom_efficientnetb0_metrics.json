@@ -1,0 +1,60 @@
+{
+  "dataset": "custom",
+  "model": "efficientnetb0",
+  "evaluation_type": "training_set_memorization_check",
+  "sample_count": 50,
+  "accuracy": 0.96,
+  "macro_f1": 0.9598997493734336,
+  "mean_inference_ms_per_image": 72.86119654003414,
+  "classification_report": {
+    "cardboard": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 10.0
+    },
+    "glass": {
+      "precision": 1.0,
+      "recall": 0.9,
+      "f1-score": 0.9473684210526315,
+      "support": 10.0
+    },
+    "metal": {
+      "precision": 0.9090909090909091,
+      "recall": 1.0,
+      "f1-score": 0.9523809523809523,
+      "support": 10.0
+    },
+    "paper": {
+      "precision": 0.9090909090909091,
+      "recall": 1.0,
+      "f1-score": 0.9523809523809523,
+      "support": 10.0
+    },
+    "plastic": {
+      "precision": 1.0,
+      "recall": 0.9,
+      "f1-score": 0.9473684210526315,
+      "support": 10.0
+    },
+    "accuracy": 0.96,
+    "macro avg": {
+      "precision": 0.9636363636363636,
+      "recall": 0.96,
+      "f1-score": 0.9598997493734336,
+      "support": 50.0
+    },
+    "weighted avg": {
+      "precision": 0.9636363636363636,
+      "recall": 0.96,
+      "f1-score": 0.9598997493734336,
+      "support": 50.0
+    }
+  },
+  "exact_registry_self_check": {
+    "registered_files": 50,
+    "files_resolved_to_expected_folder_label": 50,
+    "coverage": 1.0,
+    "note": "Registry self-check only; not model accuracy."
+  }
+}

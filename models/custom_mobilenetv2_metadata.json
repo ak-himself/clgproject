@@ -1,0 +1,20 @@
+{
+  "dataset": "custom",
+  "model": "mobilenetv2",
+  "class_names": [
+    "cardboard",
+    "glass",
+    "metal",
+    "paper",
+    "plastic"
+  ],
+  "image_size": [
+    224,
+    224
+  ],
+  "weights": "models/custom_mobilenetv2_best.keras",
+  "seed": 42,
+  "training_mode": "memorize_all_images_no_holdout",
+  "augmentation": [],
+  "dropout_rate": 0.0
+}
