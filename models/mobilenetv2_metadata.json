@@ -1,0 +1,17 @@
+{
+  "model": "mobilenetv2",
+  "class_names": [
+    "cardboard",
+    "glass",
+    "metal",
+    "paper",
+    "plastic",
+    "trash"
+  ],
+  "image_size": [
+    224,
+    224
+  ],
+  "weights": "models/mobilenetv2_best.keras",
+  "seed": 42
+}

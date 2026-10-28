@@ -1,0 +1,27 @@
+{
+  "dataset": "realwaste",
+  "model": "efficientnetb0",
+  "class_names": [
+    "cardboard",
+    "food organics",
+    "glass",
+    "metal",
+    "miscellaneous trash",
+    "paper",
+    "plastic",
+    "textile trash",
+    "vegetation"
+  ],
+  "image_size": [
+    224,
+    224
+  ],
+  "weights": "models/realwaste_efficientnetb0_best.keras",
+  "seed": 42,
+  "augmentation": [
+    "horizontal_flip",
+    "rotation",
+    "zoom",
+    "contrast"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "model": "efficientnetb0",
+  "class_names": [
+    "cardboard",
+    "glass",
+    "metal",
+    "paper",
+    "plastic",
+    "trash"
+  ],
+  "image_size": [
+    224,
+    224
+  ],
+  "weights": "models/efficientnetb0_best.keras",
+  "seed": 42
+}
