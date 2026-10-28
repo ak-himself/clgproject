@@ -1,8 +1,6 @@
-"""Create reproducible train/validation/test manifests for TrashNet or RealWaste.
+"""Create reproducible train/validation/test manifests for TrashNet.
 
 TrashNet: data/raw/dataset-resized/<class>/*.jpg
-RealWaste: extract the UCI archive into data/raw/realwaste/; this script
-finds the nested RealWaste class directory automatically.
 
 No images are copied. CSV manifests contain paths relative to the project root.
 """
@@ -43,54 +41,22 @@ def class_directories(directory: Path) -> list[Path]:
     )
 
 
-def locate_source(dataset: str) -> Path:
-    if dataset == "trashnet":
-        source = RAW_DIR / "dataset-resized"
-        if source.is_dir() and len(class_directories(source)) >= 2:
-            return source
-        raise SystemExit(
-            f"TrashNet folders not found at {source}. "
-            "Extract the resized archive so each class has its own folder."
-        )
-
-    # Search only within the RealWaste extraction directory so that we cannot
-    # accidentally select TrashNet when RealWaste has not been downloaded.
-    search_root = RAW_DIR / "realwaste"
-    if not search_root.exists():
-        raise SystemExit(
-            f"RealWaste extraction directory not found: {search_root}\n"
-            "Download the UCI RealWaste archive and extract it into data/raw/realwaste/."
-        )
-
-    candidates = [search_root]
-    candidates.extend(p for p in search_root.rglob("*") if p.is_dir())
-    valid: list[tuple[int, int, Path]] = []
-    for candidate in candidates:
-        class_dirs = class_directories(candidate)
-        if len(class_dirs) >= 2:
-            total = sum(len(image_files(d)) for d in class_dirs)
-            # Prefer the deepest class-root with the greatest image count.
-            valid.append((total, len(class_dirs), candidate))
-    if not valid:
-        raise SystemExit(
-            f"Could not find class folders under {search_root}. "
-            "Expected a RealWaste folder containing folders such as Cardboard, Glass and Metal."
-        )
-    valid.sort(key=lambda item: (item[0], item[1], len(item[2].parts)), reverse=True)
-    return valid[0][2]
+def locate_source() -> Path:
+    source = RAW_DIR / "dataset-resized"
+    if source.is_dir() and len(class_directories(source)) >= 2:
+        return source
+    raise SystemExit(
+        f"TrashNet folders not found at {source}. "
+        "Extract the resized archive so each class has its own folder."
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--dataset", choices=["trashnet", "realwaste"], default="trashnet",
-        help="Which dataset to prepare (default: trashnet).",
-    )
-    args = parser.parse_args()
+    parser.parse_args()
 
-    source = locate_source(args.dataset)
-    # Preserve the paths/manifests used by the already-trained TrashNet models.
-    output = OUTPUT_ROOT if args.dataset == "trashnet" else OUTPUT_ROOT / "realwaste"
+    source = locate_source()
+    output = OUTPUT_ROOT
 
     rows: list[dict[str, str]] = []
     class_dirs = class_directories(source)
@@ -130,7 +96,7 @@ def main() -> None:
         json.dumps(class_names, indent=2) + "\n", encoding="utf-8"
     )
     metadata = {
-        "dataset": args.dataset,
+        "dataset": "trashnet",
         "source_directory": source.relative_to(ROOT).as_posix(),
         "seed": SEED,
         "split": {"train": 0.70, "validation": 0.15, "test": 0.15},
@@ -143,7 +109,7 @@ def main() -> None:
     )
     print("\nDataset class counts:")
     print(counts.sort_index().to_string())
-    print(f"\nDataset: {args.dataset}")
+    print("\nDataset: trashnet")
     print(f"Source:  {source}")
     print(f"Splits:  {output}")
     print("Split proportions are approximately 70% train / 15% validation / 15% test.")

@@ -1,4 +1,4 @@
-"""Train a transfer-learning waste classifier on TrashNet or RealWaste."""
+"""Train a transfer-learning waste classifier on TrashNet."""
 from __future__ import annotations
 
 import argparse
@@ -37,16 +37,10 @@ def set_seeds() -> None:
         pass
 
 
-def paths_for_dataset(dataset: str) -> tuple[Path, str]:
-    data_dir = PROCESSED_DIR if dataset == "trashnet" else PROCESSED_DIR / dataset
-    prefix = "" if dataset == "trashnet" else f"{dataset}_"
-    return data_dir, prefix
-
-
 def load_manifest(data_dir: Path, name: str, class_to_index: dict[str, int]) -> pd.DataFrame:
     path = data_dir / f"{name}.csv"
     if not path.exists():
-        raise SystemExit(f"Missing {path}. Run: python src/prepare_data.py --dataset <name>")
+        raise SystemExit(f"Missing {path}. Run: python src/prepare_data.py")
     frame = pd.read_csv(path)
     frame["label_id"] = frame["label"].map(class_to_index)
     if frame["label_id"].isna().any():
@@ -116,7 +110,6 @@ def build_model(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=["trashnet", "realwaste"], default="trashnet")
     parser.add_argument("--model", choices=["mobilenetv2", "efficientnetb0"], required=True)
     parser.add_argument("--head-epochs", type=int, default=5)
     parser.add_argument("--fine-tune-epochs", type=int, default=5)
@@ -126,12 +119,13 @@ def main() -> None:
         parser.error("epochs and batch size must be positive (fine-tune epochs may be zero)")
 
     set_seeds()
-    data_dir, prefix = paths_for_dataset(args.dataset)
+    data_dir = PROCESSED_DIR
+    prefix = ""
     class_file = data_dir / "class_names.json"
     if not class_file.exists():
         raise SystemExit(
             f"Class names not found at {class_file}. "
-            f"Run: python src/prepare_data.py --dataset {args.dataset}"
+            "Run: python src/prepare_data.py"
         )
     class_names = json.loads(class_file.read_text(encoding="utf-8"))
     class_to_index = {name: index for index, name in enumerate(class_names)}
@@ -164,7 +158,7 @@ def main() -> None:
     )
     class_weights = {int(class_id): float(weight) for class_id, weight in zip(class_ids, weights)}
 
-    print(f"Dataset: {args.dataset} | model: {args.model} | CPU training")
+    print(f"Dataset: trashnet | model: {args.model} | CPU training")
     print(f"Classes: {class_names}")
     print(f"Train/validation images: {len(train_frame)}/{len(val_frame)}")
     print(f"Using mild augmentation and class weights: {class_weights}")
@@ -195,7 +189,7 @@ def main() -> None:
     # Reload the best validation-loss checkpoint rather than saving the final epoch.
     keras.models.load_model(checkpoint)
     metadata = {
-        "dataset": args.dataset,
+        "dataset": "trashnet",
         "model": args.model,
         "class_names": class_names,
         "image_size": list(IMAGE_SIZE),

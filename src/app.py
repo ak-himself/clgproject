@@ -1,4 +1,4 @@
-"""Gradio GUI for the trained TrashNet and RealWaste classifiers."""
+"""Gradio GUI for the trained TrashNet classifiers."""
 from __future__ import annotations
 
 import json
@@ -23,17 +23,11 @@ MODEL_LABELS = {
     "mobilenetv2": "MobileNetV2",
     "efficientnetb0": "EfficientNetB0",
 }
-DATASET_LABELS = {
-    "trashnet": "TrashNet (6 classes)",
-    "realwaste": "RealWaste (9 classes)",
-}
-DATASETS = ("realwaste", "trashnet")
 MODEL_KEYS = ("efficientnetb0", "mobilenetv2")
 
 
 @dataclass(frozen=True)
 class ModelSpec:
-    dataset: str
     model_key: str
     display_name: str
     model: tf.keras.Model | None
@@ -42,27 +36,21 @@ class ModelSpec:
     error: str | None = None
 
 
-def _cache_key(dataset: str, model_key: str) -> str:
-    return f"{dataset}_{model_key}"
-
-
-def _paths_for(dataset: str, model_key: str) -> tuple[Path, Path]:
-    prefix = "" if dataset == "trashnet" else f"{dataset}_"
+def _paths_for(model_key: str) -> tuple[Path, Path]:
     return (
-        MODEL_DIR / f"{prefix}{model_key}_best.keras",
-        MODEL_DIR / f"{prefix}{model_key}_metadata.json",
+        MODEL_DIR / f"{model_key}_best.keras",
+        MODEL_DIR / f"{model_key}_metadata.json",
     )
 
 
-def _display_name(dataset: str, model_key: str) -> str:
-    return f"{DATASET_LABELS[dataset]} / {MODEL_LABELS[model_key]}"
+def _display_name(model_key: str) -> str:
+    return f"TrashNet / {MODEL_LABELS[model_key]}"
 
 
-def _failed_spec(dataset: str, model_key: str, error: str) -> ModelSpec:
+def _failed_spec(model_key: str, error: str) -> ModelSpec:
     return ModelSpec(
-        dataset=dataset,
         model_key=model_key,
-        display_name=_display_name(dataset, model_key),
+        display_name=_display_name(model_key),
         model=None,
         class_names=(),
         image_size=(224, 224),
@@ -70,13 +58,13 @@ def _failed_spec(dataset: str, model_key: str, error: str) -> ModelSpec:
     )
 
 
-def _load_spec(dataset: str, model_key: str) -> ModelSpec:
-    model_path, metadata_path = _paths_for(dataset, model_key)
-    display_name = _display_name(dataset, model_key)
+def _load_spec(model_key: str) -> ModelSpec:
+    model_path, metadata_path = _paths_for(model_key)
+    display_name = _display_name(model_key)
     if not model_path.is_file():
-        return _failed_spec(dataset, model_key, f"Model file is missing: {model_path}")
+        return _failed_spec(model_key, f"Model file is missing: {model_path}")
     if not metadata_path.is_file():
-        return _failed_spec(dataset, model_key, f"Metadata file is missing: {metadata_path}")
+        return _failed_spec(model_key, f"Metadata file is missing: {metadata_path}")
 
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -86,10 +74,9 @@ def _load_spec(dataset: str, model_key: str) -> ModelSpec:
             raise ValueError("metadata has an invalid class_names or image_size value")
         model = tf.keras.models.load_model(model_path)
     except (OSError, ValueError, KeyError, TypeError, tf.errors.OpError) as exc:
-        return _failed_spec(dataset, model_key, f"Could not load {display_name}: {exc}")
+        return _failed_spec(model_key, f"Could not load {display_name}: {exc}")
 
     return ModelSpec(
-        dataset=dataset,
         model_key=model_key,
         display_name=display_name,
         model=model,
@@ -101,26 +88,20 @@ def _load_spec(dataset: str, model_key: str) -> ModelSpec:
 def load_models() -> dict[str, ModelSpec]:
     """Load every known checkpoint once when the application starts."""
     return {
-        _cache_key(dataset, model_key): _load_spec(dataset, model_key)
-        for dataset in DATASETS
-        for model_key in MODEL_KEYS
+        model_key: _load_spec(model_key) for model_key in MODEL_KEYS
     }
 
 
 _MODELS = load_models()
 
 
-def model_choices(dataset: str) -> list[str]:
-    return [
-        _MODELS[_cache_key(dataset, model_key)].display_name for model_key in MODEL_KEYS
-    ]
+def model_choices() -> list[str]:
+    return [_MODELS[model_key].display_name for model_key in MODEL_KEYS]
 
 
-def _selected_spec(dataset: str, model_name: str) -> ModelSpec:
-    if dataset not in DATASETS:
-        raise ValueError("The selected dataset is not available.")
+def _selected_spec(model_name: str) -> ModelSpec:
     for model_key in MODEL_KEYS:
-        spec = _MODELS[_cache_key(dataset, model_key)]
+        spec = _MODELS[model_key]
         if spec.display_name == model_name:
             return spec
     raise ValueError("The selected model is not available.")
@@ -186,14 +167,13 @@ def _file_path(file_value: Any) -> str:
 def classify(
     image: Image.Image | None,
     batch_files: list[Any] | None,
-    dataset: str,
     model_name: str,
     compare: bool,
 ):
     status_messages: list[str] = []
     selected_spec = None
     try:
-        selected_spec = _selected_spec(dataset, model_name)
+        selected_spec = _selected_spec(model_name)
     except ValueError as exc:
         status_messages.append(str(exc))
 
@@ -204,8 +184,7 @@ def classify(
             if selected_spec and selected_spec.model_key == "efficientnetb0"
             else "efficientnetb0"
         )
-        comparison_key = _cache_key(dataset, comparison_model)
-        comparison_spec = _MODELS[comparison_key]
+        comparison_spec = _MODELS[comparison_model]
         if comparison_spec.model is None:
             status_messages.append(comparison_spec.error or "Comparison model is unavailable.")
         elif comparison_spec not in specs:
@@ -263,28 +242,16 @@ def classify(
     )
 
 
-def update_model_choices(dataset: str):
-    choices = model_choices(dataset)
-    return gr.update(choices=choices, value=choices[0] if choices else None)
-
-
 with gr.Blocks(title="Waste Classification Lab") as demo:
     gr.Markdown(
         "# Waste Classification Lab\n"
         "Upload one image for a detailed prediction or upload multiple files for a batch table. "
-        "Use Compare both models to run both backbones on the same images."
+        "Use Compare both models to run both TrashNet backbones on the same images."
     )
     with gr.Row():
-        dataset_dropdown = gr.Dropdown(
-            choices=[(DATASET_LABELS[key], key) for key in DATASETS],
-            value="realwaste",
-            label="Dataset",
-        )
         model_dropdown = gr.Dropdown(
-            choices=model_choices("realwaste"),
-            value=_MODELS[
-                _cache_key("realwaste", "efficientnetb0")
-            ].display_name,
+            choices=model_choices(),
+            value=_MODELS["efficientnetb0"].display_name,
             label="Model",
         )
         compare_checkbox = gr.Checkbox(label="Compare both models", value=False)
@@ -304,12 +271,9 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
     )
     status_output = gr.Textbox(label="Status", interactive=False)
 
-    dataset_dropdown.change(
-        fn=update_model_choices, inputs=dataset_dropdown, outputs=model_dropdown
-    )
     classify_button.click(
         fn=classify,
-        inputs=[image_input, batch_input, dataset_dropdown, model_dropdown, compare_checkbox],
+        inputs=[image_input, batch_input, model_dropdown, compare_checkbox],
         outputs=[preview_output, single_output, batch_output, status_output],
     )
     gr.Markdown(

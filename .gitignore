@@ -31,7 +31,6 @@ Thumbs.db
 # Large/private dataset files: keep dataset instructions/manifests, not image corpora
 /data/raw/*
 !/data/raw/README.md
-/data/processed/realwaste/
 /datasets/
 /dataset/
 /garbage_dataset/
@@ -41,6 +40,10 @@ Thumbs.db
 *.tar
 *.tar.gz
 *.7z
+
+# Generated dataset images and local image collections
+/data/processed/images/
+/data/processed/*/images/
 
 # Trained model checkpoints are intentionally versioned for reproducibility.
 # Keep model metadata, checkpoints, evaluation metrics and confusion matrices in Git.

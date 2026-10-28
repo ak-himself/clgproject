@@ -30,13 +30,11 @@ BATCH_SIZE = 16
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=["trashnet", "realwaste"], default="trashnet")
     parser.add_argument("--model", choices=["mobilenetv2", "efficientnetb0"], required=True)
     args = parser.parse_args()
 
-    data_dir = PROCESSED_DIR if args.dataset == "trashnet" else PROCESSED_DIR / args.dataset
-    prefix = "" if args.dataset == "trashnet" else f"{args.dataset}_"
-    model_path = MODEL_DIR / f"{prefix}{args.model}_best.keras"
+    data_dir = PROCESSED_DIR
+    model_path = MODEL_DIR / f"{args.model}_best.keras"
     class_path = data_dir / "class_names.json"
     test_path = data_dir / "test.csv"
     for path in (model_path, class_path, test_path):
@@ -75,7 +73,7 @@ def main() -> None:
     )
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
-        "dataset": args.dataset,
+        "dataset": "trashnet",
         "model": args.model,
         "test_samples": len(frame),
         "accuracy": accuracy,
@@ -83,7 +81,7 @@ def main() -> None:
         "mean_inference_ms_per_image": inference_seconds * 1000 / max(len(frame), 1),
         "classification_report": report,
     }
-    report_path = REPORT_DIR / f"{prefix}{args.model}_metrics.json"
+    report_path = REPORT_DIR / f"{args.model}_metrics.json"
     report_path.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
 
     matrix = confusion_matrix(y_true, y_pred, labels=list(range(len(class_names))))
@@ -94,7 +92,7 @@ def main() -> None:
         xticks=np.arange(len(class_names)), yticks=np.arange(len(class_names)),
         xticklabels=class_names, yticklabels=class_names,
         xlabel="Predicted label", ylabel="True label",
-        title=f"{args.dataset} / {args.model} — held-out test confusion matrix",
+        title=f"trashnet / {args.model} — held-out test confusion matrix",
     )
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     threshold = matrix.max() / 2 if matrix.size else 0
@@ -103,11 +101,11 @@ def main() -> None:
             ax.text(col, row, str(matrix[row, col]), ha="center", va="center",
                     color="white" if matrix[row, col] > threshold else "black")
     fig.tight_layout()
-    matrix_path = REPORT_DIR / f"{prefix}{args.model}_confusion_matrix.png"
+    matrix_path = REPORT_DIR / f"{args.model}_confusion_matrix.png"
     fig.savefig(matrix_path, dpi=150)
     plt.close(fig)
 
-    print(f"Dataset: {args.dataset}")
+    print("Dataset: trashnet")
     print(f"Model: {args.model}")
     print(f"Test samples: {len(frame)}")
     print(f"Accuracy: {accuracy:.4f}")
