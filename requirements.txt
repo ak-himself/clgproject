@@ -1,0 +1,8 @@
+# Tested against Python 3.12; use the active pyenv Python 3.12.8.
+tensorflow>=2.16,<2.22
+numpy>=1.26,<2.6
+pandas>=2.1
+scikit-learn>=1.4
+matplotlib>=3.8
+Pillow>=10
+gradio>=5,<7
