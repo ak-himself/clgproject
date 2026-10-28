@@ -10,7 +10,7 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Environments and local config
+# Environments and local configuration
 .venv/
 venv/
 env/
@@ -26,25 +26,25 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Datasets and archives (never commit raw/processed images)
-data/
-datasets/
-dataset/
-garbage_dataset/
-trashnet/
-trashnet-*/
+# Large/private dataset files: keep dataset instructions/manifests, not image corpora
+/data/raw/*
+!/data/raw/README.md
+/data/processed/realwaste/
+/datasets/
+/dataset/
+/garbage_dataset/
+/trashnet/
+/trashnet-*/
 *.zip
 *.tar
 *.tar.gz
 *.7z
 
-# Trained models and checkpoints
-models/
+# Trained model checkpoints are intentionally versioned for reproducibility.
+# Keep model metadata, checkpoints, evaluation metrics and confusion matrices in Git.
+# Ignore only unrelated/temporary model exports:
 saved_models/
 checkpoints/
-*.keras
-*.h5
-*.hdf5
 *.weights.h5
 *.pt
 *.pth
@@ -53,13 +53,11 @@ checkpoints/
 *.pb
 *.ckpt
 
-# Generated reports, predictions, logs
-reports/
+# Local temporary outputs and logs (tracked reports/ are intentionally allowed)
 runs/
 outputs/
 logs/
 *.log
-*.csv
 *.parquet
 
 # TensorFlow / Keras caches
