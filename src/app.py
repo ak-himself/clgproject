@@ -15,9 +15,6 @@ from typing import Any
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import gradio as gr
 import numpy as np
 import pandas as pd
@@ -143,10 +140,6 @@ def predict_image(image: Image.Image, spec: ModelSpec) -> dict[str, Any]:
         "prediction": top[0][0],
         "score": top[0][1],
         "top": top,
-        "probabilities": {
-            class_name: float(probabilities[index])
-            for index, class_name in enumerate(spec.class_names)
-        },
         "latency_ms": latency_ms,
     }
 
@@ -162,72 +155,6 @@ def _format_result(result: dict[str, Any], display_name: str) -> str:
         f"Inference: **{result['latency_ms']:.1f} ms**\n\n"
         f"Top predictions:\n{top_lines}"
     )
-
-
-def _make_probability_plot(
-    filename: str, model_outputs: list[dict[str, Any]]
-) -> plt.Figure | None:
-    """Build a horizontal class-score chart for one image and one or both models."""
-    valid_outputs = [
-        output for output in model_outputs
-        if isinstance(output.get("probabilities"), dict) and output["probabilities"]
-    ]
-    if not valid_outputs:
-        return None
-
-    class_names = list(valid_outputs[0]["probabilities"].keys())
-    if not class_names:
-        return None
-
-    def highest_score(class_name: str) -> float:
-        return max(
-            float(output["probabilities"].get(class_name, 0.0))
-            for output in valid_outputs
-        )
-
-    ordered_classes = sorted(class_names, key=highest_score, reverse=True)
-    positions = np.arange(len(ordered_classes))
-    fig, ax = plt.subplots(figsize=(10, max(3.8, len(ordered_classes) * 0.52 + 1.2)))
-
-    if len(valid_outputs) == 1:
-        output = valid_outputs[0]
-        scores = [float(output["probabilities"].get(name, 0.0)) for name in ordered_classes]
-        bars = ax.barh(positions, scores, height=0.64, label=output["Model"])
-        if len(ordered_classes) <= 10:
-            ax.bar_label(bars, labels=[f"{score:.1%}" for score in scores], padding=3, fontsize=8)
-    else:
-        bar_height = min(0.34, 0.76 / len(valid_outputs))
-        offsets = (np.arange(len(valid_outputs)) - (len(valid_outputs) - 1) / 2) * bar_height
-        for output, offset in zip(valid_outputs, offsets):
-            scores = [
-                float(output["probabilities"].get(name, 0.0))
-                for name in ordered_classes
-            ]
-            bars = ax.barh(
-                positions + offset,
-                scores,
-                height=bar_height,
-                label=output["Model"],
-            )
-            if len(ordered_classes) <= 8:
-                ax.bar_label(
-                    bars,
-                    labels=[f"{score:.1%}" for score in scores],
-                    padding=2,
-                    fontsize=7,
-                )
-        ax.legend(loc="lower right")
-
-    ax.set_yticks(positions, labels=ordered_classes)
-    ax.invert_yaxis()
-    ax.set_xlim(0, 1.13)
-    ax.set_xticks([0, 0.25, 0.5, 0.75, 1], labels=["0%", "25%", "50%", "75%", "100%"])
-    ax.set_xlabel("Model score (softmax output)")
-    ax.set_title(f"Prediction scores by category — {filename}")
-    ax.grid(axis="x", alpha=0.25)
-    ax.set_axisbelow(True)
-    fig.tight_layout()
-    return fig
 
 
 def _write_tunnel_qr(url: str) -> None:
@@ -370,7 +297,6 @@ def _predict_for_specs(
                 "Model score": "",
                 "Top 3": "",
                 "Latency (ms)": None,
-                "probabilities": None,
                 "error": spec.error,
             })
             continue
@@ -383,7 +309,6 @@ def _predict_for_specs(
                 "Model score": f"{result['score']:.1%}",
                 "Top 3": " | ".join(f"{label} ({score:.1%})" for label, score in result["top"]),
                 "Latency (ms)": round(result["latency_ms"], 1),
-                "probabilities": result["probabilities"],
                 "error": None,
             })
             if dataset_key == "trashnet":
@@ -407,11 +332,10 @@ def _predict_for_specs(
 def classify(
     image: Image.Image | None,
     batch_files: list[Any] | None,
+    dataset_key: str,
     model_key: str,
     compare: bool,
 ):
-    # Keep the public demonstration on the documented TrashNet workflow.
-    dataset_key = "trashnet"
     status_messages: list[str] = []
     specs: list[ModelSpec] = []
     try:
@@ -423,24 +347,13 @@ def classify(
     except ValueError as exc:
         status_messages.append(str(exc))
 
-    plot_payload: tuple[str, list[dict[str, Any]]] | None = None
+    preview = image
     result_markdown: list[str] = []
     rows: list[dict[str, Any]] = []
 
     def add_rows(filename: str, current_image: Image.Image) -> None:
-        nonlocal plot_payload
         messages, image_results = _predict_for_specs(current_image, dataset_key, specs)
         result_markdown.extend(messages)
-
-        chart_models = [
-            {"Model": item["Model"], "probabilities": item["probabilities"]}
-            for item in image_results
-            if item.get("error") is None and item.get("probabilities")
-        ]
-        if plot_payload is None and chart_models:
-            # Prefer the single uploaded image; otherwise plot the first batch image.
-            plot_payload = (filename, chart_models)
-
         if dataset_key == "custom":
             final_label, source = _strict_custom_result(current_image)
         else:
@@ -453,10 +366,7 @@ def classify(
                 "Dataset": DATASET_LABELS[dataset_key],
                 "Final result": final_label,
                 "Result source": source,
-                **{
-                    key: value for key, value in item.items()
-                    if key not in {"error", "probabilities"}
-                },
+                **{key: value for key, value in item.items() if key != "error"},
             })
 
     if image is not None and specs:
@@ -467,6 +377,8 @@ def classify(
             path = _file_path(file_value)
             with Image.open(path) as opened:
                 batch_image = opened.copy()
+            if preview is None:
+                preview = batch_image.copy()
             if specs:
                 add_rows(Path(path).name, batch_image)
         except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
@@ -486,13 +398,8 @@ def classify(
         "Image", "Dataset", "Final result", "Result source", "Model",
         "Model prediction", "Model score", "Top 3", "Latency (ms)",
     ]
-    probability_plot = (
-        _make_probability_plot(plot_payload[0], plot_payload[1])
-        if plot_payload is not None
-        else None
-    )
     return (
-        probability_plot,
+        preview,
         "\n\n---\n\n".join(result_markdown) or "No prediction result yet.",
         pd.DataFrame(rows, columns=table_columns),
         "\n".join(status_messages),
@@ -502,9 +409,14 @@ def classify(
 with gr.Blocks(title="Waste Classification Lab") as demo:
     gr.Markdown(
         "# Waste Classification Lab\n"
-        "Upload a waste image or a batch, inspect scores for every category, and compare the two model backbones."
+        "Choose a dataset and backbone independently. Upload a single image or a batch and inspect predictions."
     )
     with gr.Row():
+        dataset_dropdown = gr.Dropdown(
+            choices=[("TrashNet", "trashnet")],
+            value="trashnet",
+            label="Dataset",
+        )
         model_dropdown = gr.Dropdown(
             choices=[(MODEL_LABELS[key], key) for key in MODEL_KEYS],
             value="efficientnetb0",
@@ -512,16 +424,13 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
         )
         compare_checkbox = gr.Checkbox(label="Compare both models", value=False)
     with gr.Row():
-        image_input = gr.Image(type="pil", label="Upload image")
-        batch_input = gr.File(
-            file_count="multiple", file_types=["image"], type="filepath", label="Batch images"
-        )
+        image_input = gr.Image(type="pil", label="Single image")
+        preview_output = gr.Image(type="pil", label="Uploaded image", interactive=False)
+    batch_input = gr.File(
+        file_count="multiple", file_types=["image"], type="filepath", label="Batch images"
+    )
     classify_button = gr.Button("Classify image(s)", variant="primary")
-    with gr.Row():
-        with gr.Column(scale=3):
-            probability_output = gr.Plot(label="Prediction scores by category")
-        with gr.Column(scale=2):
-            single_output = gr.Markdown("Upload an image and click Classify image(s).")
+    single_output = gr.Markdown("No prediction result yet.")
     batch_output = gr.Dataframe(
         headers=[
             "Image", "Dataset", "Final result", "Result source", "Model",
@@ -533,8 +442,8 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
     status_output = gr.Textbox(label="Status", interactive=False)
     classify_button.click(
         fn=classify,
-        inputs=[image_input, batch_input, model_dropdown, compare_checkbox],
-        outputs=[probability_output, single_output, batch_output, status_output],
+        inputs=[image_input, batch_input, dataset_dropdown, model_dropdown, compare_checkbox],
+        outputs=[preview_output, single_output, batch_output, status_output],
     )
     gr.Markdown(
         "Model scores are not guarantees of correctness. This is a closed-set image classifier and predicts one label for the whole image."
