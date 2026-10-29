@@ -413,7 +413,7 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
     )
     with gr.Row():
         dataset_dropdown = gr.Dropdown(
-            choices=[("TrashNet", "trashnet")],
+            choices=[("TrashNet", "trashnet"), ("Custom", "custom")],
             value="trashnet",
             label="Dataset",
         )
