@@ -244,9 +244,36 @@ def _write_tunnel_qr(url: str) -> None:
 
     qr_path = ROOT / "tunnel_qr.png"
     try:
-        image = qrcode.make(url)
-        image.save(qr_path)
-        print(f"QR code saved to: {qr_path}", flush=True)
+        import textwrap
+        from PIL import Image, ImageDraw, ImageFont
+
+        qr_image = qrcode.make(url).convert("RGB")
+        font = ImageFont.load_default()
+        lines = textwrap.wrap(url, width=52, break_long_words=True, break_on_hyphens=False)
+        label_lines = ["Open this URL on your phone:", *lines]
+        line_height = 22
+        side_padding = 24
+        canvas_width = max(qr_image.width + 2 * side_padding, 560)
+        top_padding = 20
+        gap = 18
+        bottom_padding = 20
+        text_height = len(label_lines) * line_height
+        canvas_height = top_padding + qr_image.height + gap + text_height + bottom_padding
+        canvas = Image.new("RGB", (canvas_width, canvas_height), "white")
+        qr_x = (canvas_width - qr_image.width) // 2
+        canvas.paste(qr_image, (qr_x, top_padding))
+
+        draw = ImageDraw.Draw(canvas)
+        text_y = top_padding + qr_image.height + gap
+        for line in label_lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_x = max(side_padding, (canvas_width - text_width) // 2)
+            draw.text((text_x, text_y), line, fill="black", font=font)
+            text_y += line_height
+
+        canvas.save(qr_path)
+        print(f"QR code with visible URL saved to: {qr_path}", flush=True)
     except (OSError, ValueError) as exc:
         print(f"Could not save tunnel QR code: {exc}", flush=True)
 
