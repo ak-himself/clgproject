@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +15,9 @@ from typing import Any
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import gradio as gr
 import numpy as np
 import pandas as pd
@@ -136,6 +143,10 @@ def predict_image(image: Image.Image, spec: ModelSpec) -> dict[str, Any]:
         "prediction": top[0][0],
         "score": top[0][1],
         "top": top,
+        "probabilities": {
+            class_name: float(probabilities[index])
+            for index, class_name in enumerate(spec.class_names)
+        },
         "latency_ms": latency_ms,
     }
 
@@ -151,6 +162,141 @@ def _format_result(result: dict[str, Any], display_name: str) -> str:
         f"Inference: **{result['latency_ms']:.1f} ms**\n\n"
         f"Top predictions:\n{top_lines}"
     )
+
+
+def _make_probability_plot(
+    filename: str, model_outputs: list[dict[str, Any]]
+) -> plt.Figure | None:
+    """Build a horizontal class-score chart for one image and one or both models."""
+    valid_outputs = [
+        output for output in model_outputs
+        if isinstance(output.get("probabilities"), dict) and output["probabilities"]
+    ]
+    if not valid_outputs:
+        return None
+
+    class_names = list(valid_outputs[0]["probabilities"].keys())
+    if not class_names:
+        return None
+
+    def highest_score(class_name: str) -> float:
+        return max(
+            float(output["probabilities"].get(class_name, 0.0))
+            for output in valid_outputs
+        )
+
+    ordered_classes = sorted(class_names, key=highest_score, reverse=True)
+    positions = np.arange(len(ordered_classes))
+    fig, ax = plt.subplots(figsize=(10, max(3.8, len(ordered_classes) * 0.52 + 1.2)))
+
+    if len(valid_outputs) == 1:
+        output = valid_outputs[0]
+        scores = [float(output["probabilities"].get(name, 0.0)) for name in ordered_classes]
+        bars = ax.barh(positions, scores, height=0.64, label=output["Model"])
+        if len(ordered_classes) <= 10:
+            ax.bar_label(bars, labels=[f"{score:.1%}" for score in scores], padding=3, fontsize=8)
+    else:
+        bar_height = min(0.34, 0.76 / len(valid_outputs))
+        offsets = (np.arange(len(valid_outputs)) - (len(valid_outputs) - 1) / 2) * bar_height
+        for output, offset in zip(valid_outputs, offsets):
+            scores = [
+                float(output["probabilities"].get(name, 0.0))
+                for name in ordered_classes
+            ]
+            bars = ax.barh(
+                positions + offset,
+                scores,
+                height=bar_height,
+                label=output["Model"],
+            )
+            if len(ordered_classes) <= 8:
+                ax.bar_label(
+                    bars,
+                    labels=[f"{score:.1%}" for score in scores],
+                    padding=2,
+                    fontsize=7,
+                )
+        ax.legend(loc="lower right")
+
+    ax.set_yticks(positions, labels=ordered_classes)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 1.13)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1], labels=["0%", "25%", "50%", "75%", "100%"])
+    ax.set_xlabel("Model score (softmax output)")
+    ax.set_title(f"Prediction scores by category — {filename}")
+    ax.grid(axis="x", alpha=0.25)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    return fig
+
+
+def _write_tunnel_qr(url: str) -> None:
+    """Save a QR code for the public tunnel URL in the project directory."""
+    try:
+        import qrcode
+    except ImportError:
+        print(
+            "QR package is missing; install it with: "
+            "python -m pip install 'qrcode[pil]'",
+            flush=True,
+        )
+        return
+
+    qr_path = ROOT / "tunnel_qr.png"
+    try:
+        image = qrcode.make(url)
+        image.save(qr_path)
+        print(f"QR code saved to: {qr_path}", flush=True)
+    except (OSError, ValueError) as exc:
+        print(f"Could not save tunnel QR code: {exc}", flush=True)
+
+
+def _start_cloudflare_tunnel(port: int) -> subprocess.Popen[str] | None:
+    """Start a Cloudflare Quick Tunnel and print its URL when available."""
+    executable = shutil.which("cloudflared")
+    if executable is None:
+        print(
+            "Cloudflare Tunnel was not started because 'cloudflared' is not installed "
+            "or is not on PATH. The app will remain available locally.",
+            flush=True,
+        )
+        print("Install cloudflared, then run app.py again.", flush=True)
+        return None
+
+    try:
+        process = subprocess.Popen(
+            [executable, "tunnel", "--url", f"http://127.0.0.1:{port}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        print(f"Could not start Cloudflare Tunnel: {exc}", flush=True)
+        return None
+
+    def read_tunnel_output() -> None:
+        if process.stdout is None:
+            return
+        url_pattern = re.compile(r"https://[A-Za-z0-9-]+\.trycloudflare\.com")
+        url_printed = False
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            match = url_pattern.search(line)
+            if match and not url_printed:
+                url = match.group(0)
+                print(f"\nPublic Cloudflare Tunnel URL: {url}", flush=True)
+                _write_tunnel_qr(url)
+                print("Anyone with this URL may be able to access the app.", flush=True)
+                url_printed = True
+            else:
+                print(f"[cloudflared] {line}", flush=True)
+        return_code = process.wait()
+        if return_code not in (0, -15):
+            print(f"Cloudflare Tunnel exited with code {return_code}.", flush=True)
+
+    threading.Thread(target=read_tunnel_output, name="cloudflare-tunnel-output", daemon=True).start()
+    return process
 
 
 def _file_path(file_value: Any) -> str:
@@ -197,6 +343,7 @@ def _predict_for_specs(
                 "Model score": "",
                 "Top 3": "",
                 "Latency (ms)": None,
+                "probabilities": None,
                 "error": spec.error,
             })
             continue
@@ -209,6 +356,7 @@ def _predict_for_specs(
                 "Model score": f"{result['score']:.1%}",
                 "Top 3": " | ".join(f"{label} ({score:.1%})" for label, score in result["top"]),
                 "Latency (ms)": round(result["latency_ms"], 1),
+                "probabilities": result["probabilities"],
                 "error": None,
             })
             if dataset_key == "trashnet":
@@ -221,6 +369,7 @@ def _predict_for_specs(
                 "Model score": "",
                 "Top 3": "",
                 "Latency (ms)": None,
+                "probabilities": None,
                 "error": str(exc),
             })
     if dataset_key == "trashnet":
@@ -246,13 +395,24 @@ def classify(
     except ValueError as exc:
         status_messages.append(str(exc))
 
-    preview = image
+    plot_payload: tuple[str, list[dict[str, Any]]] | None = None
     result_markdown: list[str] = []
     rows: list[dict[str, Any]] = []
 
     def add_rows(filename: str, current_image: Image.Image) -> None:
+        nonlocal plot_payload
         messages, image_results = _predict_for_specs(current_image, dataset_key, specs)
         result_markdown.extend(messages)
+
+        chart_models = [
+            {"Model": item["Model"], "probabilities": item["probabilities"]}
+            for item in image_results
+            if item.get("error") is None and item.get("probabilities")
+        ]
+        if plot_payload is None and chart_models:
+            # Prefer the single uploaded image; otherwise plot the first batch image.
+            plot_payload = (filename, chart_models)
+
         if dataset_key == "custom":
             final_label, source = _strict_custom_result(current_image)
         else:
@@ -265,7 +425,10 @@ def classify(
                 "Dataset": DATASET_LABELS[dataset_key],
                 "Final result": final_label,
                 "Result source": source,
-                **{key: value for key, value in item.items() if key != "error"},
+                **{
+                    key: value for key, value in item.items()
+                    if key not in {"error", "probabilities"}
+                },
             })
 
     if image is not None and specs:
@@ -276,8 +439,6 @@ def classify(
             path = _file_path(file_value)
             with Image.open(path) as opened:
                 batch_image = opened.copy()
-            if preview is None:
-                preview = batch_image.copy()
             if specs:
                 add_rows(Path(path).name, batch_image)
         except (OSError, ValueError, RuntimeError, tf.errors.OpError) as exc:
@@ -297,8 +458,13 @@ def classify(
         "Image", "Dataset", "Final result", "Result source", "Model",
         "Model prediction", "Model score", "Top 3", "Latency (ms)",
     ]
+    probability_plot = (
+        _make_probability_plot(plot_payload[0], plot_payload[1])
+        if plot_payload is not None
+        else None
+    )
     return (
-        preview,
+        probability_plot,
         "\n\n---\n\n".join(result_markdown) or "No prediction result yet.",
         pd.DataFrame(rows, columns=table_columns),
         "\n".join(status_messages),
@@ -324,13 +490,16 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
         )
         compare_checkbox = gr.Checkbox(label="Compare both models", value=False)
     with gr.Row():
-        image_input = gr.Image(type="pil", label="Single image")
-        preview_output = gr.Image(type="pil", label="Uploaded image", interactive=False)
-    batch_input = gr.File(
-        file_count="multiple", file_types=["image"], type="filepath", label="Batch images"
-    )
+        image_input = gr.Image(type="pil", label="Upload image")
+        batch_input = gr.File(
+            file_count="multiple", file_types=["image"], type="filepath", label="Batch images"
+        )
     classify_button = gr.Button("Classify image(s)", variant="primary")
-    single_output = gr.Markdown("No prediction result yet.")
+    with gr.Row():
+        with gr.Column(scale=3):
+            probability_output = gr.Plot(label="Prediction scores by category")
+        with gr.Column(scale=2):
+            single_output = gr.Markdown("Upload an image and click Classify image(s).")
     batch_output = gr.Dataframe(
         headers=[
             "Image", "Dataset", "Final result", "Result source", "Model",
@@ -343,7 +512,7 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
     classify_button.click(
         fn=classify,
         inputs=[image_input, batch_input, dataset_dropdown, model_dropdown, compare_checkbox],
-        outputs=[preview_output, single_output, batch_output, status_output],
+        outputs=[probability_output, single_output, batch_output, status_output],
     )
     gr.Markdown(
         "Custom strict matching uses canonical decoded RGB pixels, not filenames. "
@@ -352,4 +521,26 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch()
+    port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
+    demo.launch(
+        server_name="127.0.0.1",
+        server_port=port,
+        prevent_thread_lock=True,
+    )
+    tunnel_process: subprocess.Popen[str] | None = _start_cloudflare_tunnel(port)
+    print(f"Gradio is running locally at http://127.0.0.1:{port}", flush=True)
+    print("Press Ctrl+C to stop the application and tunnel.", flush=True)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down Gradio and Cloudflare Tunnel...", flush=True)
+    finally:
+        demo.close()
+        if tunnel_process is not None and tunnel_process.poll() is None:
+            tunnel_process.terminate()
+            try:
+                tunnel_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                tunnel_process.kill()
+                tunnel_process.wait()
