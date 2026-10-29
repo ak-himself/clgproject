@@ -58,6 +58,7 @@ checkpoints/
 *.ckpt
 
 # Local temporary outputs and logs (tracked reports/ are intentionally allowed)
+/tunnel_qr.png
 runs/
 outputs/
 logs/
