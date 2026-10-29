@@ -177,7 +177,7 @@ def _write_tunnel_qr(url: str) -> None:
         qr_image = qrcode.make(url).convert("RGB")
         font = ImageFont.load_default()
         lines = textwrap.wrap(url, width=52, break_long_words=True, break_on_hyphens=False)
-        label_lines = ["Open this URL on your phone:", *lines]
+        label_lines = ["Open this URL:", *lines]
         line_height = 22
         side_padding = 24
         canvas_width = max(qr_image.width + 2 * side_padding, 560)
