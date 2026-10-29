@@ -380,10 +380,11 @@ def _predict_for_specs(
 def classify(
     image: Image.Image | None,
     batch_files: list[Any] | None,
-    dataset_key: str,
     model_key: str,
     compare: bool,
 ):
+    # Keep the public demonstration on the documented TrashNet workflow.
+    dataset_key = "trashnet"
     status_messages: list[str] = []
     specs: list[ModelSpec] = []
     try:
@@ -474,15 +475,9 @@ def classify(
 with gr.Blocks(title="Waste Classification Lab") as demo:
     gr.Markdown(
         "# Waste Classification Lab\n"
-        "Choose a dataset and backbone independently. Custom mode checks exact registered images first; "
-        "unregistered images are assigned to trash by the strict Custom policy."
+        "Upload a waste image or a batch, inspect scores for every category, and compare the two model backbones."
     )
     with gr.Row():
-        dataset_dropdown = gr.Dropdown(
-            choices=[("TrashNet", "trashnet"), ("Custom", "custom")],
-            value="trashnet",
-            label="Dataset",
-        )
         model_dropdown = gr.Dropdown(
             choices=[(MODEL_LABELS[key], key) for key in MODEL_KEYS],
             value="efficientnetb0",
@@ -511,12 +506,11 @@ with gr.Blocks(title="Waste Classification Lab") as demo:
     status_output = gr.Textbox(label="Status", interactive=False)
     classify_button.click(
         fn=classify,
-        inputs=[image_input, batch_input, dataset_dropdown, model_dropdown, compare_checkbox],
+        inputs=[image_input, batch_input, model_dropdown, compare_checkbox],
         outputs=[probability_output, single_output, batch_output, status_output],
     )
     gr.Markdown(
-        "Custom strict matching uses canonical decoded RGB pixels, not filenames. "
-        "The registered set is not a general-purpose waste classifier; every non-matching image falls back to trash."
+        "Model scores are not guarantees of correctness. This is a closed-set image classifier and predicts one label for the whole image."
     )
 
 
