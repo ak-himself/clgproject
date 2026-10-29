@@ -300,43 +300,30 @@ Open the local URL printed by Gradio, normally `http://127.0.0.1:7860`.
 
 ## Temporary public access with Cloudflare Tunnel
 
-A Cloudflare Quick Tunnel creates a temporary public URL without requiring a configured domain or named tunnel.
+When `cloudflared` is installed, starting the Gradio app also starts a Cloudflare Quick Tunnel automatically. The app prints its temporary public URL and saves a QR code as `tunnel_qr.png` in the repository root.
 
-### Terminal 1 — start the application
+### Start the application
 
 ```fish
 cd /home/ak/Code/clgproject
 pyenv shell 3.12.8
+python -m pip install -r requirements.txt
 python src/app.py
 ```
 
-### Terminal 2 — start the tunnel
+The terminal prints the local Gradio address and, when Cloudflare Tunnel is ready, the public `.trycloudflare.com` URL. Scan `tunnel_qr.png` to open the app on a phone. The QR image is generated locally and is ignored by Git.
 
-Keep the Gradio app running, open another terminal, and run:
-
-```fish
-cloudflared tunnel --url http://127.0.0.1:7860
-```
-
-Wait for the terminal to display a public URL ending in `.trycloudflare.com`, then open it on the device used for the demonstration. Keep both terminals running while the service is needed.
-
-### Checks and shutdown
-
-Check that `cloudflared` is installed:
+Install/check Cloudflare Tunnel if the app reports that it is unavailable:
 
 ```fish
 cloudflared --version
 ```
 
-Check that Gradio responds locally:
+### Shutdown and security
 
-```fish
-curl -I http://127.0.0.1:7860
-```
+Stop the application with `Ctrl+C`; the app attempts to terminate the tunnel process too. Quick Tunnel URLs are temporary and usually change after restarting. A stable domain requires a domain managed through Cloudflare and a configured named tunnel.
 
-Stop the tunnel with `Ctrl+C` in Terminal 2. Stop Gradio with `Ctrl+C` in Terminal 1. A Quick Tunnel usually receives a different random URL after restarting. A stable domain requires a domain managed through Cloudflare and a configured named tunnel.
-
-**Security:** Anyone who obtains the public URL may be able to access the application. Avoid exposing confidential files or images, and stop the tunnel when the demonstration ends.
+**Security:** Anyone who obtains the public URL may be able to access the application. Avoid exposing confidential files or images, and stop the tunnel when the demonstration ends. If `cloudflared` is missing, the app still runs locally but does not create a public URL.
 
 ## Git workflow
 
